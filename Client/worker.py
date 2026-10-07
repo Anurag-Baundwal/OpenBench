@@ -57,7 +57,7 @@ from client import try_forever
 
 ## Basic configuration of the Client. These timeouts can be changed at will
 
-CLIENT_VERSION   = 54 # Client version to send to the Server
+CLIENT_VERSION   = 55 # Client version to send to the Server
 TIMEOUT_HTTP     = 30 # Timeout in seconds for HTTP requests
 TIMEOUT_ERROR    = 60 # Timeout in seconds when any errors are thrown
 TIMEOUT_WORKLOAD = 60 # Timeout in seconds between workload requests
@@ -1147,7 +1147,9 @@ def safe_download_engine(config, branch, net_path):
     compiler  = config.compilers[engine][0]
 
     try:
-        return utils.prepare_engine(engine, net_path, branch_name, source, make_path, out_path, private, compiler)
+        # Compile with as many jobs as the Worker may use for games
+        return utils.prepare_engine(
+            engine, net_path, branch_name, source, make_path, out_path, private, compiler, config.threads)
 
     except utils.OpenBenchBuildFailedException as error:
 

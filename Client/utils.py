@@ -168,10 +168,11 @@ def check_for_engine_binary(out_path):
         os.rename(out_path, '%s.exe' % (out_path))
         return '%s.exe' % (out_path)
 
-def makefile_command(net_path, make_path, out_path, compiler):
+def makefile_command(net_path, make_path, out_path, compiler, jobs=None):
 
-    # Build with -j, and EXE= to contol the output location
-    command = ['make', '-j', 'EXE=%s' % (out_path)]
+    # Build with a bounded -j, as an unbounded one starts every compile at once,
+    # which can exhaust the memory of small machines. EXE= controls the output location
+    command = ['make', '-j%d' % (jobs or os.cpu_count() or 1), 'EXE=%s' % (out_path)]
 
     # Build with CC/CXX= when using a custom compiler
     if compiler and not any(rc in compiler for rc in ('rustc','cargo')):
@@ -266,7 +267,7 @@ def download_network(server, username, password, engine, net_name, net_sha, net_
         os.remove(net_path)
         raise OpenBenchCorruptedNetworkException('Invalid SHA for %s' % (net_name))
 
-def prepare_engine(engine, net_path, branch, source, make_path, out_path, private, compiler=None):
+def prepare_engine(engine, net_path, branch, source, make_path, out_path, private, compiler=None, jobs=None):
 
     # Check to see if we already have the binary
     if check_for_engine_binary(out_path):
@@ -308,7 +309,7 @@ def prepare_engine(engine, net_path, branch, source, make_path, out_path, privat
         # Prepare the MAKEFILE command
         make_path = os.path.join(src_path, make_path)
         bin_path  = os.path.join(make_path, os.path.basename(out_path))
-        make_cmd  = makefile_command(net_path, make_path, os.path.basename(out_path), compiler)
+        make_cmd  = makefile_command(net_path, make_path, os.path.basename(out_path), compiler, jobs)
 
         # Build the engine, which will produce a binary to bin_path, to be moved after
         process     = subprocess.Popen(make_cmd, cwd=make_path, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
