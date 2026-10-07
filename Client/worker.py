@@ -58,7 +58,7 @@ from client import try_forever
 
 ## Basic configuration of the Client. These timeouts can be changed at will
 
-CLIENT_VERSION   = 51 # Client version to send to the Server
+CLIENT_VERSION   = 52 # Client version to send to the Server
 TIMEOUT_HTTP     = 30 # Timeout in seconds for HTTP requests
 TIMEOUT_ERROR    = 60 # Timeout in seconds when any errors are thrown
 TIMEOUT_WORKLOAD = 60 # Timeout in seconds between workload requests
@@ -117,6 +117,10 @@ class Configuration:
         self.cli_options = args.cli_options
 
     def check_requirements(self):
+
+        # Windows builds use MSYS2's make and compilers, when installed
+        if IS_WINDOWS:
+            add_msys2_to_path()
 
         # Verify that we have make installed
         print('\nLooking for Make... [v%s]' % locate_utility('make'))
@@ -777,6 +781,26 @@ def locate_utility(util, force_exit=True, report_error=True):
         if report_error: print('[Error] Unable to locate %s' % (util))
         if force_exit: sys.exit()
 
+def add_msys2_to_path():
+
+    # MSYS2's compilers go first on PATH, since DLLs from other programs earlier
+    # on PATH can make g++ fail silently. Its usr\bin, for make, goes last, since
+    # it also holds a python.exe without the Client's packages. Only this process
+    # and its children see the change, and repeated calls leave PATH unchanged
+    root = os.environ.get('MSYS2_ROOT', r'C:\msys64')
+    ucrt = os.path.join(root, 'ucrt64', 'bin')
+    usr  = os.path.join(root, 'usr', 'bin')
+
+    if not os.path.isfile(os.path.join(ucrt, 'g++.exe')):
+        return
+
+    ours  = [os.path.normcase(x) for x in (ucrt, usr)]
+    paths = [x for x in os.environ['PATH'].split(os.pathsep)
+             if x and os.path.normcase(x.rstrip('\\')) not in ours]
+
+    os.environ['PATH'] = os.pathsep.join([ucrt] + paths + [usr])
+    print('\nUsing MSYS2 from %s' % (root))
+
 def kill_process_tree(pid):
 
     # Kill a process, and every process it spawned. The parent goes first, so
@@ -1287,7 +1311,7 @@ def parse_arguments(client_args):
 
     # Arguments specific to worker.py
     p.add_argument('-T', '--threads' , help='Total Threads'               , required=True      )
-    p.add_argument('-N', '--nsockets', help='Number of Sockets'           , required=True      )
+    p.add_argument('-N', '--nsockets', help='Number of Sockets'           , default='1'        )
     p.add_argument('-I', '--identity', help='Machine pseudonym'           , required=False     )
     p.add_argument(      '--syzygy'  , help='Syzygy WDL'                  , required=False     )
     p.add_argument(      '--fleet'   , help='Fleet Mode'                  , action='store_true')

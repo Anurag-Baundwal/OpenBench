@@ -46,12 +46,12 @@ Each worker needs:
 Then, from `Client/`:
 
 ```
-python client.py -U NAME -P PASSWORD -S https://SERVER -T 8 -N 1
+python client.py -U NAME -P PASSWORD -S https://SERVER -T 8
 ```
 
-`-T` is the number of games played at once. Leave a core or two free for the system.
+`-T` is the number of games played at once. Leave a core or two free for the system. `-N`, the number of CPU sockets, defaults to 1.
 
-- **Windows (MSYS2):** put `C:\msys64\ucrt64\bin` first on `PATH`, and `C:\msys64\usr\bin` (for `make`) last, then run the client with the full path to your Windows Python. If `ucrt64\bin` comes later, DLLs from other programs on `PATH` can make `g++` fail silently. MSYS2 also ships its own `python.exe`, which lacks the Client's packages.
+- **Windows:** install [MSYS2](https://www.msys2.org/), then run `pacman -S --needed mingw-w64-ucrt-x86_64-gcc make` once in its UCRT64 terminal. Run the worker itself from a normal Command Prompt with your Windows Python. It finds MSYS2 in `C:\msys64` by itself (set `MSYS2_ROOT` if it's elsewhere) and puts its compilers first on its own `PATH`, since DLLs from other programs can otherwise make `g++` fail silently.
 - **Termux:** `pkg install python clang make`, then `pip install -r Client/requirements.txt`. Run `termux-wake-lock` first, or Android may pause the worker.
 
 Every machine must produce the same `bench` node count for a given commit, since a mismatch stops the test. Check this once on each new kind of machine, e.g. ARM vs x86, before relying on it.
