@@ -57,7 +57,7 @@ from client import try_forever
 
 ## Basic configuration of the Client. These timeouts can be changed at will
 
-CLIENT_VERSION   = 53 # Client version to send to the Server
+CLIENT_VERSION   = 54 # Client version to send to the Server
 TIMEOUT_HTTP     = 30 # Timeout in seconds for HTTP requests
 TIMEOUT_ERROR    = 60 # Timeout in seconds when any errors are thrown
 TIMEOUT_WORKLOAD = 60 # Timeout in seconds between workload requests
@@ -417,6 +417,12 @@ class MatchRunner:
     # Fastchess style lines from match.py, ie "Finished game 3 (A vs B): 1-0 {max_plies}"
     FINISHED_GAME = re.compile(r'^Finished game (\d+) \(.*\): (1-0|0-1|1/2-1/2) \{(.*)\}$')
 
+    # match.py's own running totals only cover this workload's games, so they are hidden in
+    # favour of one line per finished Pair, and the whole Test's totals from the Server
+    QUIET_LINE = re.compile(r"^(\[\d+/\d+\] |Match (complete|stopped): \d+/\d+ games$|"
+        r"Engine [12] \(.*\): \d+ wins$|Draws: \d+$|Score: |Elo: .* from Engine 1's perspective$|"
+        r"Results, percentage, and Elo are from|Press Ctrl\+C to stop)")
+
     # match.py's --out writes these alongside the records, which the Client never uses
     RECORD_SIDECARS = ['.meta.json', '.schedule.jsonl', '.summary.json']
 
@@ -523,7 +529,7 @@ class MatchRunner:
         results['illegals'  ] += reason.endswith('_illegal_move')
 
         # Save the game result
-        results['games'][game] = result
+        results['games'][game] = (result, reason)
 
         # Check to see if the Pair has finished
         first, second = game_to_pair(game)
@@ -531,17 +537,40 @@ class MatchRunner:
             return
 
         # Get the indices for the Pentanomial, and the two for Trinomial
-        p = pair_to_penta(results['games'][first], results['games'][second])
-        t1, t2 = pair_to_trinomial(results['games'][first], results['games'][second])
+        (r1, reason1), (r2, reason2) = results['games'].pop(first), results['games'].pop(second)
+        p = pair_to_penta(r1, r2)
+        t1, t2 = pair_to_trinomial(r1, r2)
 
         # Update everything
         results['trinomial'  ][t1] += 1
         results['trinomial'  ][t2] += 1
         results['pentanomial'][p ] += 1
 
-        # Clean up results['games']
-        del results['games'][first]
-        del results['games'][second]
+        # Return the Pair's number and a description, for the Worker's output
+        return (first + 1) // 2, MatchRunner.describe_pair((t1, reason1), (t2, reason2))
+
+    @staticmethod
+    def describe_pair(game1, game2):
+
+        # Outcomes are from Dev's perspective, with Dev as Engine 1 and Base as Engine 2.
+        # Example: "Dev Win (+1) [G1: Win, G2: Draw]"
+        verdicts = ['Dev Double Loss (-2)', 'Dev Loss (-1)', 'Tie (=0)', 'Dev Win (+1)', 'Dev Double Win (+2)']
+        outcomes = ['Loss', 'Draw', 'Win']
+        branches = { 'engine1' : 'dev', 'engine2' : 'base' }
+
+        def outcome(label, game):
+            outcome, reason = game
+            text = '%s: %s' % (label, outcomes[outcome])
+
+            # Point out the unusual endings, ie "G2: Loss, dev time loss"
+            for prefix, branch in branches.items():
+                if reason.startswith(prefix + '_'):
+                    text += ', %s %s' % (branch, reason[len(prefix) + 1:].replace('_', ' '))
+            if reason == 'runner_error':
+                text += ', runner error'
+            return text
+
+        return '%s [%s, %s]' % (verdicts[game1[0] + game2[0]], outcome('G1', game1), outcome('G2', game2))
 
     @staticmethod
     def kill_everything(runners, dev_process, base_process):
@@ -724,6 +753,10 @@ class ResultsReporter(object):
                 response = ServerReporter.report_results(self.config, self.pending).json()
                 self.last_report = time.time()
                 self.pending = []
+
+                # The Server replies with the whole Test's results, from every Worker
+                if 'stats' in response:
+                    print('\nTest #%d, all workers:\n%s\n' % (self.config.workload['test']['id'], response['stats']))
 
             # If the test ended, kill all tasks
             if 'stop' in response:
@@ -1175,7 +1208,7 @@ def run_and_parse_runner(config, command, runner_idx, results_queue, abort_flag,
 
         'trinomial'   : [0, 0, 0],       # LDW
         'pentanomial' : [0, 0, 0, 0, 0], # LL DL DD DW WW
-        'games'       : {},              # game_id : result_str
+        'games'       : {},              # game_id : (result_str, termination)
 
         'crashes'     : 0,               # "engineN_timeout", the engine stopped responding
         'timelosses'  : 0,               # "engineN_time_loss"
@@ -1184,6 +1217,7 @@ def run_and_parse_runner(config, command, runner_idx, results_queue, abort_flag,
 
     # Kept for the Server, should the match runner fail
     output = collections.deque(maxlen=100)
+    pairs  = config.workload['distribution']['rounds-per-runner'] // 2
 
     # Read each line of output until the pipe closes and we get b'' back
     for line in iter(runner.stdout.readline, b''):
@@ -1193,10 +1227,14 @@ def run_and_parse_runner(config, command, runner_idx, results_queue, abort_flag,
 
         line = line.decode('utf-8', errors='replace').strip()
         output.append(line)
-        print('[#%d] %s' % (runner_idx, line))
 
+        # One line per finished Pair, rather than per game
         if line.startswith('Finished game'):
-            MatchRunner.update_results(results, line)
+            if (pair := MatchRunner.update_results(results, line)):
+                print('[#%d] Pair %d/%d: %s' % (runner_idx, pair[0], pairs, pair[1]))
+
+        elif line and not MatchRunner.QUIET_LINE.match(line):
+            print('[#%d] %s' % (runner_idx, line))
 
         # Add to the results queue every time we have a game-pair finished
         if any(results['pentanomial']):
