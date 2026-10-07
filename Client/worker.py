@@ -41,7 +41,6 @@ import traceback
 import uuid
 
 from subprocess import PIPE, Popen, call, STDOUT
-from itertools import combinations_with_replacement
 from concurrent.futures import ThreadPoolExecutor
 
 ## Local imports must only use "import x", never "from x import ..."
@@ -58,7 +57,7 @@ from client import try_forever
 
 ## Basic configuration of the Client. These timeouts can be changed at will
 
-CLIENT_VERSION   = 52 # Client version to send to the Server
+CLIENT_VERSION   = 53 # Client version to send to the Server
 TIMEOUT_HTTP     = 30 # Timeout in seconds for HTTP requests
 TIMEOUT_ERROR    = 60 # Timeout in seconds when any errors are thrown
 TIMEOUT_WORKLOAD = 60 # Timeout in seconds between workload requests
@@ -92,12 +91,12 @@ class Configuration:
         self.machine_name   = 'None'
         self.machine_id     = 'None'
         self.secret_token   = 'None'
-        self.syzygy_max     = 2
+        self.syzygy_max     = 0 # 4PC has no tablebases, but the Server expects a value
         self.blacklist      = []
 
         self.process_args(args)   # Rest of the command line settings
         self.check_requirements() # Checks for Make, g++ or clang++, and match.py
-        self.init_client()        # Create folder structure and verify Syzygy
+        self.init_client()        # Create folder structure
         self.validate_setup()     # Check the threads and sockets values provided
 
     def process_args(self, args):
@@ -109,7 +108,6 @@ class Configuration:
         self.threads     = int(args.threads) if args.threads != 'auto' else self.physical_cores
         self.sockets     = int(args.nsockets)
         self.identity    = args.identity if args.identity else 'None'
-        self.syzygy_path = args.syzygy   if args.syzygy   else None
         self.fleet       = args.fleet    if args.fleet    else False
         self.noisy       = args.noisy    if args.noisy    else False
         self.focus       = args.focus    if args.focus    else []
@@ -143,9 +141,11 @@ class Configuration:
             print ('[Error] Unable to locate the match runner (%s)' % (runner_path))
             sys.exit()
 
-        # Identify the exact match runner by its contents, for the Server's records
+        # Identify the exact match runner by its contents, for the Server's records.
+        # Line endings are ignored, as Windows checkouts may convert them
         with open(runner_path, 'rb') as fin:
-            self.runner_ver = '4pc_arena match.py %s' % (hashlib.sha256(fin.read()).hexdigest()[:8])
+            content = fin.read().replace(b'\r\n', b'\n')
+            self.runner_ver = '4pc_arena match.py %s' % (hashlib.sha256(content).hexdigest()[:8])
         print('Looking for Match Runner... [%s]' % (self.runner_ver))
 
     def init_client(self):
@@ -157,18 +157,6 @@ class Configuration:
         for folder in ['PGNs', 'Engines', 'Networks', 'Books']:
             if not os.path.isdir(folder):
                 os.mkdir(folder)
-
-        # Check until we stop finding valid N-man tables
-        if self.syzygy_path:
-            while validate_syzygy_exists(self, self.syzygy_max+1):
-                self.syzygy_max = self.syzygy_max + 1
-
-        # 1-man and 2-man tables are not a thing
-        if self.syzygy_max < 3:
-            self.syzygy_max = 0
-
-        # Report highest complete depth that we found
-        print('Looking for Syzygy... [%d-Man]' % (self.syzygy_max))
 
     def validate_setup(self):
 
@@ -274,6 +262,7 @@ class ServerReporter:
 
         # Throw all the way back to the client.py
         if 'Bad Client Version' in as_json.get('error', ''):
+            print('\n[Note] %s' % (as_json['error']))
             raise BadVersionException()
 
         # Some fatal error, forcing us out of the Workload
@@ -837,41 +826,6 @@ def cleanup_client():
         if file_age(os.path.join('Networks', file)) > SECONDS_PER_WEEK:
             os.remove(os.path.join('Networks', file))
 
-def validate_syzygy_exists(config, K):
-
-    letters = ['', 'Q', 'R', 'B', 'N', 'P']
-
-    # Generate many potential K[] v K[], including all valid ones
-    candidates = ['K%svK%s' % (''.join(lhs), ''.join(rhs))
-        for N in range(1, K - 1)
-            for lhs in combinations_with_replacement(letters, N)
-                for rhs in combinations_with_replacement(letters, K - N - 2)]
-
-    # Syzygy does LHS having more pieces first, stronger pieces second
-    def valid_filename(name):
-        for i, letter in enumerate(letters[1:]):
-            name = name.replace(letter, str(9 - i))
-        lhs, rhs = name.replace('K', '9').split('v')
-        return int(lhs) >= int(rhs) and name != 'KvK'
-
-    # See if file exists in (any of) the paths
-    def has_filename(paths, name):
-        for path in paths:
-            if os.path.isfile(os.path.join(path, name + '.rtbw')):
-                return True
-        return False
-
-    # Split paths, using ":" on Unix, and ";" on Windows
-    paths = config.syzygy_path.split(':' if IS_LINUX else ';')
-
-    # Check to see if each Syzygy File exists as desired
-    for filename in list(filter(valid_filename, set(candidates))):
-        if not has_filename(paths, filename):
-            return False
-
-    return True
-
-
 def scale_time_control(workload, scale_factor, branch):
 
     # Extract everything from the workload dictionary
@@ -973,7 +927,7 @@ def server_configure_worker(config):
         'machine_name'   : config.identity,       # Optional pseudonym for the machine, otherwise None
         'concurrency'    : config.threads,        # Threads to use to play games
         'sockets'        : config.sockets,        # Match runner copies, usually equal to Socket count
-        'syzygy_max'     : config.syzygy_max,     # Whether or not the machine has Syzygy support
+        'syzygy_max'     : config.syzygy_max,     # Always 0, since 4PC has no tablebases
         'noisy'          : config.noisy,          # Whether our results are unstable for time-based workloads
         'focus'          : config.focus,          # List of engines we have a preference to help
         'only'           : config.only,           # List of engines we are willing to help, exclusively
@@ -995,7 +949,8 @@ def server_configure_worker(config):
 
     # Throw all the way back to the client.py
     if 'Bad Client Version' in response.get('error', ''):
-        raise BadVersionException();
+        print('\n[Note] %s' % (response['error']))
+        raise BadVersionException()
 
     # The 'error' header is included if there was an issue
     if 'error' in response:
@@ -1020,7 +975,8 @@ def server_request_workload(config):
 
     # Throw all the way back to the client.py
     if 'Bad Client Version' in response.get('error', ''):
-        raise BadVersionException();
+        print('\n[Note] %s' % (response['error']))
+        raise BadVersionException()
 
     # Something very bad happened. Re-initialize the Client
     if 'error' in response:
@@ -1313,7 +1269,6 @@ def parse_arguments(client_args):
     p.add_argument('-T', '--threads' , help='Total Threads'               , required=True      )
     p.add_argument('-N', '--nsockets', help='Number of Sockets'           , default='1'        )
     p.add_argument('-I', '--identity', help='Machine pseudonym'           , required=False     )
-    p.add_argument(      '--syzygy'  , help='Syzygy WDL'                  , required=False     )
     p.add_argument(      '--fleet'   , help='Fleet Mode'                  , action='store_true')
     p.add_argument(      '--noisy'   , help='Reject time-based workloads' , action='store_true')
     p.add_argument(      '--focus'   , help='Prefer certain engine(s)'    , nargs='+'          )
