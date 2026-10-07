@@ -57,7 +57,7 @@ from client import try_forever
 
 ## Basic configuration of the Client. These timeouts can be changed at will
 
-CLIENT_VERSION   = 57 # Client version to send to the Server
+CLIENT_VERSION   = 58 # Client version to send to the Server
 TIMEOUT_HTTP     = 30 # Timeout in seconds for HTTP requests
 TIMEOUT_ERROR    = 60 # Timeout in seconds when any errors are thrown
 TIMEOUT_WORKLOAD = 60 # Timeout in seconds between workload requests
@@ -881,13 +881,40 @@ def add_msys2_to_path():
     os.environ['PATH'] = os.pathsep.join([ucrt] + paths + [usr])
     print('\nUsing MSYS2 from %s' % (root))
 
+def process_descendants(parent):
+
+    try:
+        return parent.children(recursive=True)
+
+    # psutil confirms that each child started after its parent, using the boot time
+    # in /proc/stat, which Android does not let apps read. Follow parent ids alone
+    except psutil.AccessDenied:
+        pass
+
+    by_parent = collections.defaultdict(list)
+    for process in psutil.process_iter(['ppid']):
+        by_parent[process.info['ppid']].append(process)
+
+    # Walk down from the parent, guarding against a cycle from a reused pid
+    found, seen, stack = [], set(), [parent.pid]
+    while stack:
+        pid = stack.pop()
+        if pid in seen:
+            continue
+        seen.add(pid)
+        for child in by_parent[pid]:
+            found.append(child)
+            stack.append(child.pid)
+
+    return found
+
 def kill_process_tree(pid):
 
     # Kill a process, and every process it spawned. The parent goes first, so
     # that it cannot launch any replacements for the children being killed
     try:
         parent   = psutil.Process(pid)
-        children = parent.children(recursive=True)
+        children = process_descendants(parent)
     except psutil.NoSuchProcess:
         return
 
