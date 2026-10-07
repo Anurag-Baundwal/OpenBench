@@ -368,17 +368,37 @@ def network_edit(request, engine, network):
 
 # Purely Helper functions for Books views
 
-def book_verify(request):
+def local_book_source(name):
+
+    # Source of a Book served by this server, out of Books/, via api_books()
+    return '/api/books/%s/' % (name)
+
+def local_book_path(name):
+
+    # Path to a Book in Books/, or None. Names are restricted to the same
+    # characters book_create() allows, so they can never escape Books/
+    if not re.match(r'^[a-zA-Z0-9_.-]{1,32}$', name) or name in ('.', '..'):
+        return None
+
+    path = os.path.join(PROJECT_PATH, 'Books', name)
+    return path if os.path.isfile(path) else None
+
+def book_verify(request, name):
 
     # A bad sha or source breaks every Client that downloads the Book. Books are
-    # only served out of Github for now, hence the restriction on the source.
+    # served either out of Github, or by this server from its own Books/ folder
 
     if not re.match(r'^[0-9a-f]{64}$', request.POST['sha']):
         return 'Sha must be a 64 digit lowercase hex digest'
 
+    if request.POST['source'] == local_book_source(name):
+        if not local_book_path(name):
+            return 'Locally served Books must exist as Books/%s on the server' % (name)
+        return None
+
     required_path = 'https://raw.githubusercontent.com/'
     if not request.POST['source'].startswith(required_path):
-        return 'Sources must start with %s' % (required_path)
+        return 'Sources must start with %s, or be %s' % (required_path, local_book_source(name))
 
     return None
 
@@ -393,7 +413,7 @@ def book_create(request, name):
         error = 'A Book already exists with the name %s' % (name)
         return OpenBench.views.redirect(request, '/manage/books/', error=error)
 
-    if (error := book_verify(request)):
+    if (error := book_verify(request, name)):
         return OpenBench.views.redirect(request, '/manage/books/', error=error)
 
     # The only place a Book's name is ever set
@@ -405,7 +425,7 @@ def book_create(request, name):
 
 def book_edit(request, book):
 
-    if (error := book_verify(request)):
+    if (error := book_verify(request, book.name)):
         return OpenBench.views.redirect(request, '/manage/books/%s/' % (book.name), error=error)
 
     # The name is never changed, since Workloads refer to Books by name

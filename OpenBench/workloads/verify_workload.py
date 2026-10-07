@@ -86,6 +86,7 @@ def verify_test_creation(errors, request):
         (verify_options        , 'base_options', 'Threads', 'Base Options'),
         (verify_options        , 'base_options', 'Hash', 'Base Options'),
         (verify_time_control   , 'base_time_control', 'Base Time Control'),
+        (verify_no_time_odds   , 'dev_time_control', 'base_time_control'),
 
         # Verify everything about the Test Settings
         (verify_book           , 'book_name', 'Book'),
@@ -246,8 +247,23 @@ def verify_book(errors, request, field, field_name):
     except: errors.append('{0} was not found in the configuration'.format(field_name))
 
 def verify_time_control(errors, request, field, field_name):
-    try: OpenBench.utils.TimeControl.parse(request.POST[field])
-    except: errors.append('{0} is not parsable'.format(field_name))
+
+    try: time_control = OpenBench.utils.TimeControl.parse(request.POST[field])
+    except: return errors.append('{0} is not parsable'.format(field_name))
+
+    # The 4pc_arena match runner only plays Fischer and sudden death clocks
+    if OpenBench.utils.TimeControl.control_type(time_control) == OpenBench.utils.TimeControl.CYCLIC:
+        errors.append('{0} cannot be cyclic (moves/time) with the 4pc_arena match runner'.format(field_name))
+
+def verify_no_time_odds(errors, request, dev_field, base_field):
+
+    # The 4pc_arena match runner applies a single time control to both engines
+    try:
+        dev_time_control  = OpenBench.utils.TimeControl.parse(request.POST[dev_field])
+        base_time_control = OpenBench.utils.TimeControl.parse(request.POST[base_field])
+        if dev_time_control != base_time_control:
+            errors.append('Dev and Base must use the same Time Control with the 4pc_arena match runner')
+    except: pass # Unparsable time controls are reported by verify_time_control()
 
 def verify_win_adj(errors, request, field):
     try:

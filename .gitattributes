@@ -1,0 +1,3 @@
+# Opening books are SHA-256 verified by every Client. Keep their bytes identical
+# on every platform by disabling line ending conversion.
+Books/** -text

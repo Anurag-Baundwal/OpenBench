@@ -1,0 +1,36 @@
+{
+    "private" : true,
+    "nps"     : 650000,
+    "source"  : "https://github.com/Anurag-Baundwal/stockfish_4pc",
+
+    "build" : {
+        "path"      : "",
+        "compilers" : ["g++", "clang++"],
+        "cpuflags"  : [],
+        "systems"   : ["Windows", "Linux", "Darwin", "Android"]
+    },
+
+    "test_presets" : {
+        "default" : {
+            "base_branch"       : "dev",
+            "both_options"      : "Threads=1 Hash=128",
+            "both_time_control" : "10.0+0.1",
+            "test_bounds"       : "[0.00, 3.00]",
+            "test_confidence"   : "[0.05, 0.05]",
+            "book_name"         : "fens.txt",
+            "workload_size"     : "4"
+        }
+    },
+
+    "tune_presets" : {
+        "default" : {
+            "both_options"      : "Threads=1 Hash=128",
+            "both_time_control" : "10.0+0.1",
+            "book_name"         : "fens.txt"
+        }
+    },
+
+    "datagen_presets" : {
+        "default" : {}
+    }
+}

@@ -19,7 +19,11 @@
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
 import argparse
+import bz2
+import collections
+import concurrent.futures
 import cpuinfo
+import hashlib
 import importlib
 import json
 import multiprocessing
@@ -30,15 +34,11 @@ import queue
 import re
 import requests
 import shlex
-import shutil
-import subprocess
 import sys
-import tempfile
 import threading
 import time
 import traceback
 import uuid
-import zipfile
 
 from subprocess import PIPE, Popen, call, STDOUT
 from itertools import combinations_with_replacement
@@ -48,20 +48,17 @@ from concurrent.futures import ThreadPoolExecutor
 ## Local imports must also be done in reload_local_imports()
 
 import bench
-import genfens
 import isa_detector
-import pgn_util
 import utils
 
 ## Local imports from client are an exception
 
 from client import BadVersionException
-from client import url_join
 from client import try_forever
 
 ## Basic configuration of the Client. These timeouts can be changed at will
 
-CLIENT_VERSION   = 50 # Client version to send to the Server
+CLIENT_VERSION   = 51 # Client version to send to the Server
 TIMEOUT_HTTP     = 30 # Timeout in seconds for HTTP requests
 TIMEOUT_ERROR    = 60 # Timeout in seconds when any errors are thrown
 TIMEOUT_WORKLOAD = 60 # Timeout in seconds between workload requests
@@ -99,7 +96,7 @@ class Configuration:
         self.blacklist      = []
 
         self.process_args(args)   # Rest of the command line settings
-        self.check_requirements() # Checks for Make, and g++ or clang++
+        self.check_requirements() # Checks for Make, g++ or clang++, and match.py
         self.init_client()        # Create folder structure and verify Syzygy
         self.validate_setup()     # Check the threads and sockets values provided
 
@@ -128,12 +125,24 @@ class Configuration:
         gcc_ver       = locate_utility('g++', force_exit=False, report_error=False)
         clang_ver     = locate_utility('clang++', force_exit=False, report_error=False)
         self.cxx_comp = 'g++' if gcc_ver else 'clang++' if clang_ver else None
-        print('Looking for C++ Compiler... [%s v%s]' % (self.cxx_comp, locate_utility(self.cxx_comp)))
 
-        # Cannot build fastchess nor observe CPU flags
+        # Cannot build engines nor observe CPU flags
         if not self.cxx_comp:
             print ('[Error] Unable to locate C++ Compiler (g++ or clang++)')
             sys.exit()
+
+        print('Looking for C++ Compiler... [%s v%s]' % (self.cxx_comp, gcc_ver or clang_ver))
+
+        # The 4pc_arena match runner ships with the Client, as match.py
+        runner_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'match.py')
+        if not os.path.isfile(runner_path):
+            print ('[Error] Unable to locate the match runner (%s)' % (runner_path))
+            sys.exit()
+
+        # Identify the exact match runner by its contents, for the Server's records
+        with open(runner_path, 'rb') as fin:
+            self.runner_ver = '4pc_arena match.py %s' % (hashlib.sha256(fin.read()).hexdigest()[:8])
+        print('Looking for Match Runner... [%s]' % (self.runner_ver))
 
     def init_client(self):
 
@@ -407,118 +416,90 @@ class ServerReporter:
 
 class MatchRunner:
 
-    ## Handles building the very long string of arguments that need to be passed
-    ## to match runner in order to launch a set of games. Operates on the Configuration,
-    ## and a small number of secondary arguments that are not housed in the Configuration
+    ## Handles building the list of arguments that need to be passed to the match
+    ## runner, 4pc_arena's match.py, in order to launch a set of games. Operates on
+    ## the Configuration, and a small number of secondary arguments that are not housed
+    ## in the Configuration. Also reads back the records that match.py writes per game
+
+    # Fastchess style lines from match.py, ie "Finished game 3 (A vs B): 1-0 {max_plies}"
+    FINISHED_GAME = re.compile(r'^Finished game (\d+) \(.*\): (1-0|0-1|1/2-1/2) \{(.*)\}$')
+
+    # match.py's --out writes these alongside the records, which the Client never uses
+    RECORD_SIDECARS = ['.meta.json', '.schedule.jsonl', '.summary.json']
 
     @staticmethod
     def executable(config):
-        return ['fastchess-ob.exe', './fastchess-ob'][IS_LINUX]
-
-    @staticmethod
-    def basic_settings(config):
-
-        # Assume Fischer if FRC, 960, or FISCHER appears in the Opening Book
-        book_name = config.workload['test']['book']['name'].upper()
-        is_frc    = 'FRC' in book_name or '960' in book_name or 'FISCHER' in book_name
-        variant   = ['standard', 'fischerandom'][is_frc]
-
-        # Always include -recover, -variant, and -testEnv
-        return '-recover -variant %s -testEnv' % variant
+        # Unbuffered, so that each finished game is seen as soon as it is played
+        return [sys.executable, '-u', 'match.py']
 
     @staticmethod
     def concurrency_settings(config):
 
-        is_datagen      = config.workload['test']['type'] == 'DATAGEN'
-        no_reverse      = is_datagen and not config.workload['test']['play_reverses']
-        games_per_round = 1 if no_reverse else 2
-
-        return '-concurrency %d -rounds %d -games %d' % (
-            config.workload['distribution']['concurrency-per'],
-            config.workload['distribution']['rounds-per-runner'],
-            games_per_round,
-        )
-
-    @staticmethod
-    def adjudication_settings(config):
-
-        # All three possible adjudication settings
-        win_adj    = config.workload['test']['win_adj'   ]
-        draw_adj   = config.workload['test']['draw_adj'  ]
-        syzygy_adj = config.workload['test']['syzygy_adj']
-
-        # Empty, unless specified in the settings
-        win_flags    = ['', '-resign ' + win_adj ][win_adj  != 'None']
-        draw_flags   = ['', '-draw '   + draw_adj][draw_adj != 'None']
-        syzygy_flags = ''
-
-        # Set the tb path if we have them, and are allowed to use them
-        if syzygy_adj != 'DISABLED' and config.syzygy_max:
-            syzygy_flags = '-tb %s' % (config.syzygy_path.replace('\\', '\\\\'))
-
-        # We would only get a test we can do; specify a limit if needed
-        if syzygy_adj != 'DISABLED' and syzygy_adj != 'OPTIONAL':
-            syzygy_flags += ' -tbpieces %s' % (syzygy_adj.split('-')[0])
-
-        return '%s %s %s' % (win_flags, draw_flags, syzygy_flags)
+        # match.py plays every opening twice, swapping which engine is Red/Yellow
+        return [
+            '--workers', str(config.workload['distribution']['concurrency-per']),
+            '--pairs'  , str(config.workload['distribution']['rounds-per-runner'] // 2),
+        ]
 
     @staticmethod
     def book_settings(config, runner_idx):
 
-        # DATAGEN creates their own book
-        if config.workload['test']['type'] == 'DATAGEN':
+        book_name = config.workload['test']['book']['name']
 
-            # -repeat might not be applied, so handle the book offsets
-            no_reverse = not config.workload['test']['play_reverses']
-            pairs      = config.workload['distribution']['rounds-per-runner'] // 2
-            start      = 1 + (runner_idx * pairs * (1 + no_reverse))
-            return '-openings file=Books/openbench.genfens.epd format=epd order=sequential start=%d' % (start)
+        if book_name.upper() == 'NONE':
+            return []
 
-        # Can handle EPD and PGN Books, which must be specified
-        book_name   = config.workload['test']['book']['name']
-        book_suffix = book_name.split('.')[-1]
-
-        # Start position is determined partially by runner index
+        # Start position is determined partially by runner index. match.py walks
+        # one seeded shuffle of the book, so disjoint starts use disjoint openings
         pairs = config.workload['distribution']['rounds-per-runner'] // 2
         start = config.workload['test']['book_index'] + runner_idx * pairs
 
-        return '-openings file=Books/%s format=%s order=random start=%d -srand %d' % (
-            book_name, book_suffix, start, config.workload['test']['book_seed'])
+        return [
+            '--fens'      , os.path.join('Books', book_name),
+            '--fens-start', str(start),
+            '--seed'      , str(config.workload['test']['book_seed']),
+        ]
 
     @staticmethod
-    def engine_settings(config, command, branch, scale_factor, runner_idx):
+    def engine_settings(config, command, branch, runner_idx):
 
-        # Extract configuration from the Workload
+        # Dev is always Engine 1, and Base is always Engine 2
+        index   = { 'dev' : 1, 'base' : 2 }[branch]
         options = config.workload['test'][branch]['options']
-        engine  = config.workload['test'][branch]['engine']
-        syzygy  = config.workload['test']['syzygy_wdl']
-
-        # Human-readable name, and scale the time control
-        name    = command.replace('.exe', '')
-        control = scale_time_control(config.workload, scale_factor, branch)
-
-        # Set the SyzygyPath if we have them, and are allowed to use them
-        if syzygy != 'DISABLED' and config.syzygy_max:
-            options += ' SyzygyPath=%s' % (config.syzygy_path.replace('\\', '\\\\'))
-
-        # Set a SyzygyProbeLimit if we may only use up-to N-Man
-        if syzygy != 'DISABLED' and syzygy != 'OPTIONAL':
-            options += ' SyzygyProbeLimit=%s' % (syzygy.split('-')[0])
 
         # Add any of the custom SPSA settings
         if config.workload['test']['type'] == 'SPSA':
             for param, data in config.workload['spsa'].items():
                 options += ' %s=%s' % (param, str(data[branch][runner_idx]))
 
-        # Join options together in format expected by match runner
-        options = ' option.'.join([''] + re.findall(r'"[^"]*"|\S+', options))
-        return '-engine dir=Engines/ cmd=./%s proto=uci %s%s name=%s-%s' % (command, control, options, engine, branch)
+        flags = ['--engine%d' % (index), os.path.join('Engines', command)]
+
+        # Threads and Hash have dedicated flags, everything else is a UCI option
+        for name, value in re.findall(r'(\S+?)=("[^"]*"|\'[^\']*\'|\S*)', options):
+            value = value.strip('"\'')
+            if name == 'Threads':
+                flags += ['--threads%d' % (index), value]
+            elif name == 'Hash':
+                flags += ['--hash%d' % (index), value]
+            else:
+                flags += ['--engine%d-option' % (index), '%s=%s' % (name, value)]
+
+        return flags
 
     @staticmethod
-    def pgnout_settings(config, timestamp, runner_idx):
-        match_line = '^info string pgncomment .*'
-        return '-pgnout file=%s seldepth=true nodes=true match_line=%s' % (
-            MatchRunner.pgn_name(config, timestamp, runner_idx), shlex.quote(match_line))
+    def time_control_settings(config, scale_factor):
+
+        # The Server only accepts Workloads where Dev and Base share a time control
+        return scale_time_control(config.workload, scale_factor, 'dev')
+
+    @staticmethod
+    def output_settings(config, timestamp, runner_idx):
+
+        return [
+            '--pgn4', MatchRunner.pgn_name(config, timestamp, runner_idx),
+            '--out' , MatchRunner.record_name(config, timestamp, runner_idx),
+            '--fresh',
+        ]
 
     @staticmethod
     def update_results(results, line):
@@ -537,19 +518,18 @@ class MatchRunner:
             lookup = { '0-1' : 0, '1/2-1/2' : 1, '1-0' : 2 }
             return lookup[r1], 2 - lookup[r2]
 
-        # Extract the game # and result str from a match runner output line
-        def parse_finished_game(line):
-            tokens = line.split()
-            return int(tokens[2]), tokens[6]
+        # Extract the game #, result str, and termination from the line
+        if not (match := MatchRunner.FINISHED_GAME.match(line)):
+            return
 
-        # Parse for errors resulting in adjudication
-        reason = line.split(':')[1]
-        results['crashes'   ] += 'disconnect' in reason or 'stalls' in reason
-        results['timelosses'] += 'on time' in reason
-        results['illegals'  ] += 'illegal' in reason
+        game, result, reason = int(match.group(1)), match.group(2), match.group(3)
 
-        # Parse Game # and result, and save
-        game, result = parse_finished_game(line)
+        # Parse for errors resulting in adjudication, using match.py's terminations
+        results['crashes'   ] += reason.endswith('_timeout') or reason == 'runner_error'
+        results['timelosses'] += reason.endswith('_time_loss')
+        results['illegals'  ] += reason.endswith('_illegal_move')
+
+        # Save the game result
         results['games'][game] = result
 
         # Check to see if the Pair has finished
@@ -571,14 +551,15 @@ class MatchRunner:
         del results['games'][second]
 
     @staticmethod
-    def kill_everything(dev_process, base_process):
+    def kill_everything(runners, dev_process, base_process):
 
-        if IS_LINUX:
-            utils.kill_process_by_name('fastchess-ob')
+        # Kill each match runner along with the engines it launched. Exited runners
+        # are skipped, so that a recycled pid can never be mistaken for one of ours
+        for runner in runners:
+            if runner.poll() is None:
+                kill_process_tree(runner.pid)
 
-        if IS_WINDOWS:
-            utils.kill_process_by_name('fastchess-ob.exe')
-
+        # Catch any engines that were somehow orphaned
         utils.kill_process_by_name(dev_process)
         utils.kill_process_by_name(base_process)
 
@@ -588,60 +569,99 @@ class MatchRunner:
         test_id   = int(config.workload['test']['id'])
         result_id = int(config.workload['result']['id'])
 
-        # Format: <Test>-<Result>-<Time>-<Index>.pgn
-        return 'PGNs/%d.%d.%d.%d.pgn' % (test_id, result_id, timestamp, runner_idx)
-
-
-class PGNHelper:
+        # Format: <Test>-<Result>-<Time>-<Index>.pgn4
+        return 'PGNs/%d.%d.%d.%d.pgn4' % (test_id, result_id, timestamp, runner_idx)
 
     @staticmethod
-    def slice_pgn_file(file):
+    def record_name(config, timestamp, runner_idx):
 
-        if not os.path.isfile(file):
-            reason = 'Unable to find %s. Match runner exited with no finished games.' % (file)
-            raise utils.OpenBenchMisssingPGNException(reason)
+        test_id   = int(config.workload['test']['id'])
+        result_id = int(config.workload['result']['id'])
 
-        with open(file) as pgn:
-
-            while True:
-
-                headers = list(iter(lambda: pgn.readline().rstrip(), ''))
-                moves   = list(iter(lambda: pgn.readline().rstrip(), ''))
-
-                if not headers or not moves:
-                    break
-
-                yield (headers, moves)
+        # Format: <Test>-<Result>-<Time>-<Index>.jsonl
+        return 'PGNs/%d.%d.%d.%d.jsonl' % (test_id, result_id, timestamp, runner_idx)
 
     @staticmethod
-    def get_pgn_header(sliced_headers, header):
-        for line in sliced_headers:
-            if line.startswith('[%s ' % header):
-                return line.split('"')[1]
+    def read_records(config, timestamp, runner_idx):
+
+        # One JSON record per finished game. A runner that failed early may have none
+        fname = MatchRunner.record_name(config, timestamp, runner_idx)
+        if not os.path.isfile(fname):
+            return []
+
+        with open(fname, encoding='utf-8') as fin:
+            return [json.loads(line) for line in fin if line.strip()]
 
     @staticmethod
-    def get_error_reason(sliced_headers):
+    def delete_record_sidecars(config, timestamp, runner_idx):
 
-        reason = PGNHelper.get_pgn_header(sliced_headers, 'Termination')
-
-        if reason and 'abandoned' in reason:
-            return 'Disconnect'
-
-        if reason and 'stalled' in reason:
-            return 'Stalled'
-
-        if reason and 'illegal' in reason:
-            return 'Illegal Move'
+        # The metadata sidecar alone holds a copy of the entire book, so these
+        # are deleted immediately, rather than waiting on cleanup_client()
+        fname = MatchRunner.record_name(config, timestamp, runner_idx)
+        for suffix in MatchRunner.RECORD_SIDECARS:
+            if os.path.isfile(fname + suffix):
+                os.remove(fname + suffix)
 
     @staticmethod
-    def pretty_format(headers, moves):
-        return '\n'.join(headers + [''] + moves)
+    def get_error_reason(config, record):
+
+        # Engine 1 is always Dev, and Engine 2 is always Base
+        termination = str(record.get('termination', ''))
+        branch      = 'dev' if termination.startswith('engine1_') else 'base'
+        engine      = config.workload['test'][branch]['engine']
+        branch_name = config.workload['test'][branch]['name']
+
+        if termination.endswith('_timeout'):
+            return 'Stalled: [%s] %s' % (engine, branch_name)
+
+        if termination.endswith('_illegal_move'):
+            return 'Illegal Move: [%s] %s' % (engine, branch_name)
+
+    @staticmethod
+    def pretty_format(record):
+
+        # Everything needed to replay the game, without the per-move search info
+        keys = ['game_id', 'engine_names', 'engine1_team', 'result', 'termination',
+                'illegal_move', 'reported_by', 'position_error', 'fen', 'moves']
+        return json.dumps({ key : record[key] for key in keys if key in record }, indent=4)
+
+    @staticmethod
+    def collect_nps_stats(records, scale_factor):
+
+        stats = {
+            'dev' : { 'nodes': 0, 'time': 0, 'time_scaled': 0 },
+            'base': { 'nodes': 0, 'time': 0, 'time_scaled': 0 },
+        }
+
+        # Each search notes which engine made it, with Engine 1 always being Dev
+        for record in records:
+            for search in record.get('searches', []):
+                if 'nodes' in search and 'elapsed_ms' in search:
+                    branch = 'dev' if search.get('engine') == 1 else 'base'
+                    stats[branch]['nodes']       += search['nodes']
+                    stats[branch]['time']        += search['elapsed_ms']
+                    stats[branch]['time_scaled'] += search['elapsed_ms'] / scale_factor
+
+        return stats
+
+    @staticmethod
+    def compress_pgn_files(file_names):
+
+        # PGN4 has no per-move comments to strip, so COMPACT and VERBOSE match
+        compressed_text = []
+        for fname in file_names:
+            if os.path.isfile(fname):
+                print ('Compressing %s...' % fname)
+                with open(fname, encoding='utf-8') as fin:
+                    compressed_text.append(fin.read())
+
+        return bz2.compress(''.join(compressed_text).encode('utf-8'))
 
 class ResultsReporter(object):
 
     ## Handles idle looping while reading from the results Queue that the match runner
     ## workers place results into. Once finished, this class can be used to collect
-    ## all of the errors in the PGN, and send htem back to the server.
+    ## all of the errors in the game records, and send them back to the server.
 
     def __init__(self, config, tasks, results_queue, abort_flag):
         self.config        = config
@@ -677,6 +697,11 @@ class ResultsReporter(object):
             # Kill everything if openbench.exit is created
             if os.path.isfile('openbench.exit'):
                 return self.abort_flag.set()
+
+            # A match runner failed. Stop waiting on the rest, but keep the
+            # results of the game pairs that were completed before the failure
+            if self.abort_flag.is_set():
+                break
 
         # Exhaust the Results Queue completely since Tasks are done
         while True:
@@ -726,14 +751,10 @@ class ResultsReporter(object):
 
         for x in range(runner_cnt):
 
-            # Reuse logic that was given to match runner to decide the PGN name
-            fname = MatchRunner.pgn_name(self.config, timestamp, x)
-
-            # For any game with weird Termination, report it
-            for header, moves in PGNHelper.slice_pgn_file(fname):
-                error = PGNHelper.get_error_reason(header)
-                if error:
-                    as_str = PGNHelper.pretty_format(header, moves)
+            # For any game with a stalled engine or an illegal move, report it
+            for record in MatchRunner.read_records(self.config, timestamp, x):
+                if (error := MatchRunner.get_error_reason(self.config, record)):
+                    as_str = MatchRunner.pretty_format(record)
                     ServerReporter.report_engine_error(self.config, error, as_str)
 
 
@@ -748,20 +769,6 @@ def get_version(program):
 
     raise Exception('All attempts to get the version of %s failed' % (program))
 
-def compare_versions(program_path, min_version_str):
-
-    if not program_path:
-        return None
-
-    version_str = get_version(program_path)
-
-    if not version_str:
-        return None
-
-    program_ver = tuple(map(int, version_str.split('.')))
-    minimum_ver = tuple(map(int, min_version_str.split('.')))
-    return version_str if program_ver >= minimum_ver else None
-
 def locate_utility(util, force_exit=True, report_error=True):
 
     try: return get_version(util)
@@ -770,15 +777,21 @@ def locate_utility(util, force_exit=True, report_error=True):
         if report_error: print('[Error] Unable to locate %s' % (util))
         if force_exit: sys.exit()
 
-def set_runner_permissions():
+def kill_process_tree(pid):
 
-    status = os.system('sudo -n chmod 777 fastchess-ob > /dev/null 2>&1')
+    # Kill a process, and every process it spawned. The parent goes first, so
+    # that it cannot launch any replacements for the children being killed
+    try:
+        parent   = psutil.Process(pid)
+        children = parent.children(recursive=True)
+    except psutil.NoSuchProcess:
+        return
 
-    if status != 0:
-        status = os.system('chmod 777 fastchess-ob > /dev/null 2>&1')
+    for process in [parent] + children:
+        try: process.kill()
+        except psutil.NoSuchProcess: pass
 
-    if status != 0:
-        print ('[ERROR] Unable to set execute permissions on fastchess-ob')
+    psutil.wait_procs([parent] + children, timeout=5)
 
 
 def cleanup_client():
@@ -847,52 +860,32 @@ def scale_time_control(workload, scale_factor, branch):
     # No scaling is needed for fixed nodes or fixed depth games
     if results:
         mode, value = results.group('mode', 'value')
-        return 'tc=inf %s=%s' % ({'N' : 'nodes', 'D' : 'depth'}[mode], value)
+        return ['--%s' % ({'N' : 'nodes', 'D' : 'depth'}[mode]), value]
 
-    # Searching for MoveTime or Fixed Time Controls ("MT=")
+    # Searching for MoveTime or Fixed Time Controls ("MT="), given in milliseconds
     pattern = r'(?P<mode>(MT))=(?P<value>(\d+))'
     results = re.search(pattern, time_control.upper())
 
-    # Scale the time based on this machine's NPS. Add a time Margin to avoid time losses.
+    # Scale the time based on this machine's NPS
     if results:
         mode, value = results.group('mode', 'value')
-        return 'st=%.2f timemargin=250' % ((float(value) * scale_factor / 1000))
+        return ['--movetime', str(max(1, round(float(value) * scale_factor)))]
 
-    # Searching for "X/Y+Z" time controls
+    # Searching for "X/Y+Z" time controls, given in seconds
     pattern = r'(?P<moves>(\d+/)?)(?P<base>\d*(\.\d+)?)(?P<inc>\+(\d+\.)?\d+)?'
     results = re.search(pattern, time_control)
     moves, base, inc = results.group('moves', 'base', 'inc')
 
-    # Strip the trailing and leading symbols
-    moves = None if moves == '' else moves.rstrip('/')
-    inc   = 0.0  if inc   is None else inc.lstrip('+')
+    # The Server never creates cyclic Workloads, as match.py cannot play them
+    if moves:
+        raise utils.OpenBenchFatalWorkerException('Cyclic time controls are not supported')
 
-    # Scale the time based on this machine's NPS
-    base = float(base) * scale_factor
-    inc  = float(inc ) * scale_factor
+    # Scale the time based on this machine's NPS, as milliseconds for match.py
+    base = float(base) * scale_factor * 1000
+    inc  = float(inc.lstrip('+') if inc else 0.0) * scale_factor * 1000
 
-    # Format the time control for match runner
-    if moves is None:
-        return 'tc=%.2f+%.2f timemargin=250' % (base, inc)
-    return 'tc=%d/%.2f+%.2f timemargin=250' % (int(moves), base, inc)
-
-def find_pgn_error(reason, command):
-
-    pgn_file = command.split('-pgnout file=')[1].split()[0]
-    with open(pgn_file, 'r') as fin:
-        data = fin.readlines()
-
-    reason = reason.split('{')[1]
-    for ii in range(len(data) - 1, -1, -1):
-        if reason in data[ii]:
-            break
-
-    pgn = ""
-    while "[Event " not in data[ii]:
-        pgn = data[ii] + pgn
-        ii = ii - 1
-    return data[ii] + pgn
-
+    # Add a time Margin to avoid time losses, as was done for Fastchess
+    return ['--tc', str(max(1, round(base))), '--inc', str(round(inc)), '--margin', '250']
 
 def determine_scale_factor(config, dev_name, base_name):
 
@@ -926,81 +919,6 @@ def determine_scale_factor(config, dev_name, base_name):
 
 ## Functions interacting with the OpenBench server that establish the initial
 ## connection and then make simple requests to retrieve Workloads as json objects
-
-def server_configure_fastchess(config):
-    server_configure_match_runner(config, 'fastchess', build_fastchess_in_dir)
-
-def server_configure_match_runner(config, name, build_func):
-
-    # OpenBench Server holds the runner repo and git-ref
-    print ('\nConfiguring %s...' % name)
-    print ('> Requesting %s configuration from openbench' % name)
-    target  = url_join(config.server, 'clientMatchRunnerVersionRef')
-    payload = { 'username' : config.username, 'password' : config.password }
-    data    = requests.post(target, data=payload, timeout=TIMEOUT_HTTP).json()
-
-    # Might already have a sufficiently new Fastchess binary
-    print ('> Checking for existing %s-ob binary' % name)
-    runner_path = os.path.join(os.getcwd(), '%s-ob' % name)
-    runner_path = utils.check_for_engine_binary(runner_path)
-    acceptable_ver = compare_versions(runner_path, data['%s_min_version' % name])
-
-    if acceptable_ver:
-        print ('> Found %s-ob v%s' % (name, acceptable_ver))
-        setattr(config, '%s_ver' % name, acceptable_ver)
-        return
-
-    # Download a .zip archive of the git-ref from the specified repo
-    repo_url, repo_ref = data['%s_repo_url' % name], data['%s_repo_ref' % name]
-    print ('> Downloading %s from %s' % (repo_ref, repo_url))
-    response = requests.get(url_join(repo_url, 'archive', '%s.zip' % repo_ref))
-
-    with tempfile.TemporaryDirectory() as temp_dir:
-
-        # Move the .zip contents into a temporary .zip file
-        with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
-            tmp_file.write(response.content)
-            temp_zip_path = tmp_file.name
-
-        # Extract the .zip file into our local directory
-        with zipfile.ZipFile(temp_zip_path, 'r') as zip_ref:
-            zip_ref.extractall(temp_dir)
-
-        # Prepare to build, using the root folder of the extracted files as the cwd
-        print ('> Extracting and building %s %s' % (name, repo_ref))
-        runner_dir = os.path.join(temp_dir, os.listdir(temp_dir)[0])
-        bin_path   = os.path.join(runner_dir, name)
-
-        build_func(config, runner_dir)
-
-        # Somehow we built runner but failed to find the binary
-        if not utils.check_for_engine_binary(bin_path):
-            raise OpenBenchMatchRunnerBuildFailedException()
-
-        # Append .exe if needed, and then report the match runner version that was built
-        binary  = utils.check_for_engine_binary(bin_path)
-        version = get_version(binary)
-        setattr(config, '%s_ver' % name, version)
-        print ('> Finished building v%s' % version)
-
-        # Move the finished match runner binary to the Client's Root directory
-        out_path = os.path.join(os.getcwd(), os.path.basename(binary).replace(name, '%s-ob' % name))
-        shutil.move(binary, out_path)
-
-def build_fastchess_in_dir(config, runner_dir):
-    print ('> Using C++ compiler %s...' % config.cxx_comp)
-
-    # Execute the build, using our C++ compiler, and record any output
-    make_cmd    = ['make', '-j', 'CXX=%s' % config.cxx_comp]
-    process     = subprocess.Popen(make_cmd, cwd=runner_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    comp_output = process.communicate()[0].decode('utf-8')
-
-    # Make threw an error, and thus failed to build
-    if process.returncode:
-        print ('\nFailed to build fastchess\n\nCompiler Output:')
-        for line in comp_output.split('\n'):
-            print ('> %s' % (line))
-        raise OpenBenchMatchRunnerBuildFailedException()
 
 def server_configure_worker(config):
 
@@ -1036,8 +954,8 @@ def server_configure_worker(config):
         'focus'          : config.focus,          # List of engines we have a preference to help
         'only'           : config.only,           # List of engines we are willing to help, exclusively
         'cli_options'    : config.cli_options,    # Command line options except for credentials and server
-        'cxx_comp'       : config.cxx_comp,       # C++ Compiler used to build Fastchess binaries
-        'fastchess_ver'  : config.fastchess_ver,  # Fastchess Version, set during server_configure_fastchess()
+        'cxx_comp'       : config.cxx_comp,       # C++ Compiler found during check_requirements()
+        'runner_ver'     : config.runner_ver,     # Match runner identity, set during check_requirements()
         'client_ver'     : CLIENT_VERSION,        # Version of the Client, which the server may reject
     }
 
@@ -1097,8 +1015,14 @@ def server_request_workload(config):
 
 def complete_workload(config):
 
+    # The match runner cannot generate the openings that Datagen relies on
+    if config.workload['test']['type'] == 'DATAGEN':
+        config.blacklist.append(config.workload['test']['id'])
+        raise Exception('Datagen Workloads are not supported by the 4pc_arena match runner')
+
     # Download the opening book, throws an exception on corruption
     utils.download_opening_book(
+        config.server,
         config.workload['test']['book']['sha'   ],
         config.workload['test']['book']['source'],
         config.workload['test']['book']['name'  ],
@@ -1111,10 +1035,6 @@ def complete_workload(config):
     # Build or download each engine, or exit if an error occured
     dev_name  = safe_download_engine(config, 'dev' , dev_network )
     base_name = safe_download_engine(config, 'base', base_network)
-
-    # Datagen creates a book on-the-fly
-    if config.workload['test']['type'] == 'DATAGEN':
-        safe_create_genfens_opening_book(config, dev_name)
 
     # Scale time control based on the Engine's local NPS
     scale_factor = determine_scale_factor(config, dev_name, base_name)
@@ -1135,35 +1055,48 @@ def complete_workload(config):
         timestamp  = time.time()
         results    = multiprocessing.Queue()
         abort_flag = threading.Event()
+        runners    = [] # Each match runner process, as launched by the workers
 
         tasks = [] # Create each of the match runner workers
         for x in range(runner_cnt):
             cmd = build_runner_command(config, dev_name, base_name, scale_factor, timestamp, x)
-            tasks.append(executor.submit(run_and_parse_runner, config, cmd, x, results, abort_flag))
+            tasks.append(executor.submit(run_and_parse_runner, config, cmd, x, results, abort_flag, runners))
 
         # Process the Queue until we exit, finish, or are told to stop by the server
         try:
             rr = ResultsReporter(config, tasks, results, abort_flag)
             rr.process_until_finished()
+            MatchRunner.kill_everything(runners, dev_name, base_name)
+            concurrent.futures.wait(tasks)
             rr.send_errors(timestamp, runner_cnt)
-            MatchRunner.kill_everything(dev_name, base_name)
 
         # Kill everything during an Exception, but print it
         except (Exception, KeyboardInterrupt):
             abort_flag.set()
-            MatchRunner.kill_everything(dev_name, base_name)
+            MatchRunner.kill_everything(runners, dev_name, base_name)
             raise
 
         pgn_files = [MatchRunner.pgn_name(config, timestamp, x) for x in range(runner_cnt)]
+        records   = sum([MatchRunner.read_records(config, timestamp, x) for x in range(runner_cnt)], [])
+
+        for x in range(runner_cnt):
+            MatchRunner.delete_record_sidecars(config, timestamp, x)
 
         # Submit NPS stats
         if config.workload['test']['type'] in ('SPRT', 'GAMES'):
-            ServerReporter.report_nps_stats(config, pgn_util.collect_nps_stats(pgn_files, scale_factor))
+            ServerReporter.report_nps_stats(config, MatchRunner.collect_nps_stats(records, scale_factor))
 
         # Upload the PGN if requested
         if config.workload['test']['upload_pgns'] != 'FALSE':
-            compact = config.workload['test']['upload_pgns'] == 'COMPACT'
-            ServerReporter.report_pgn(config, pgn_util.compress_pgn_files(pgn_files, scale_factor, compact))
+            ServerReporter.report_pgn(config, MatchRunner.compress_pgn_files(pgn_files))
+
+        # A match runner exiting with an error, rather than finishing its games, is
+        # usually an engine crashing. Report it, and stop taking this Workload
+        if (failures := [task.exception() for task in tasks if task.exception()]):
+            config.blacklist.append(config.workload['test']['id'])
+            for failure in failures:
+                ServerReporter.report_engine_error(config, failure.message, failure.logs)
+            raise failures[0]
 
 def safe_download_network_weights(config, branch):
 
@@ -1214,26 +1147,6 @@ def safe_download_engine(config, branch, net_path):
         ServerReporter.report_build_fail(config, branch, error.logs)
         raise
 
-def safe_create_genfens_opening_book(config, dev_name):
-
-    with open(os.path.join('Books', 'openbench.genfens.epd'), 'w') as fout:
-
-        args = {
-            'N'       : genfens.genfens_required_openings_each(config),
-            'book'    : genfens.genfens_book_input_name(config),
-            'seeds'   : config.workload['test']['genfens_seeds'],
-            'extra'   : config.workload['test']['genfens_args'],
-            'engine'  : os.path.join('Engines', dev_name),
-            'threads' : config.threads,
-            'output'  : fout,
-        }
-
-        try: genfens.create_genfens_opening_book(args)
-
-        except utils.OpenBenchFailedGenfensException as error:
-            ServerReporter.report_engine_error(config, error.message)
-            raise
-
 def safe_run_benchmarks(config, branch, engine):
 
     name     = config.workload['test'][branch]['name']
@@ -1255,20 +1168,28 @@ def safe_run_benchmarks(config, branch, engine):
 
 def build_runner_command(config, dev_cmd, base_cmd, scale_factor, timestamp, runner_idx):
 
-    flags  = ' ' + MatchRunner.basic_settings(config)
-    flags += ' ' + MatchRunner.concurrency_settings(config)
-    flags += ' ' + MatchRunner.adjudication_settings(config)
-    flags += ' ' + MatchRunner.engine_settings(config, dev_cmd, 'dev', scale_factor, runner_idx)
-    flags += ' ' + MatchRunner.engine_settings(config, base_cmd, 'base', scale_factor, runner_idx)
-    flags += ' ' + MatchRunner.book_settings(config, runner_idx)
-    flags += ' ' + MatchRunner.pgnout_settings(config, timestamp, runner_idx)
+    command  = MatchRunner.executable(config)
+    command += MatchRunner.engine_settings(config, dev_cmd, 'dev', runner_idx)
+    command += MatchRunner.engine_settings(config, base_cmd, 'base', runner_idx)
+    command += MatchRunner.time_control_settings(config, scale_factor)
+    command += MatchRunner.concurrency_settings(config)
+    command += MatchRunner.book_settings(config, runner_idx)
+    command += MatchRunner.output_settings(config, timestamp, runner_idx)
 
-    return MatchRunner.executable(config) + flags
+    return command
 
-def run_and_parse_runner(config, command, runner_idx, results_queue, abort_flag):
+def run_and_parse_runner(config, command, runner_idx, results_queue, abort_flag, runners):
 
-    print('\n[#%d] Launching match runner...\n%s\n' % (runner_idx, command))
-    runner = Popen(shlex.split(command), stdout=PIPE)
+    # The Workload might have ended before this match runner was launched
+    if abort_flag.is_set():
+        return
+
+    print('\n[#%d] Launching match runner...\n%s\n' % (runner_idx, shlex.join(command)))
+
+    # Engine names are echoed by match.py, so don't depend on the system locale
+    env    = dict(os.environ, PYTHONIOENCODING='utf-8')
+    runner = Popen(command, stdout=PIPE, stderr=STDOUT, env=env)
+    runners.append(runner)
 
     results = {
 
@@ -1276,25 +1197,25 @@ def run_and_parse_runner(config, command, runner_idx, results_queue, abort_flag)
         'pentanomial' : [0, 0, 0, 0, 0], # LL DL DD DW WW
         'games'       : {},              # game_id : result_str
 
-        'crashes'     : 0,               # " disconnect" or "connection stalls"
-        'timelosses'  : 0,               # " loses on time "
-        'illegals'    : 0,               # " illegal move "
+        'crashes'     : 0,               # "engineN_timeout", the engine stopped responding
+        'timelosses'  : 0,               # "engineN_time_loss"
+        'illegals'    : 0,               # "engineN_illegal_move"
     }
 
-    while True:
+    # Kept for the Server, should the match runner fail
+    output = collections.deque(maxlen=100)
 
-        # Read each line of output until the pipe closes and we get "" back
-        line = runner.stdout.readline().strip().decode('ascii')
-        if not line:
-            break
+    # Read each line of output until the pipe closes and we get b'' back
+    for line in iter(runner.stdout.readline, b''):
 
         if abort_flag.is_set():
             break
 
-        if 'Started game' not in line and 'Score of' not in line:
-            print('[#%d] %s' % (runner_idx, line))
+        line = line.decode('utf-8', errors='replace').strip()
+        output.append(line)
+        print('[#%d] %s' % (runner_idx, line))
 
-        if 'Finished game' in line:
+        if line.startswith('Finished game'):
             MatchRunner.update_results(results, line)
 
         # Add to the results queue every time we have a game-pair finished
@@ -1317,6 +1238,29 @@ def run_and_parse_runner(config, command, runner_idx, results_queue, abort_flag)
             results['timelosses' ] = 0
             results['illegals'   ] = 0
 
+    # Stopped reading early, so take down the runner and its engines ourselves
+    if abort_flag.is_set():
+        kill_process_tree(runner.pid)
+
+    # Exit codes: 0 when all games were played, 130 when interrupted (Ctrl+C),
+    # and otherwise an error, most often after an engine crashed repeatedly
+    if runner.wait() in (0, 130) or abort_flag.is_set():
+        return
+
+    # Flag the crash with the Server, and stop the other match runners
+    results_queue.put({
+        'trinomial'   : [0, 0, 0],
+        'pentanomial' : [0, 0, 0, 0, 0],
+        'crashes'     : 1,
+        'timelosses'  : 0,
+        'illegals'    : 0,
+        'runner_idx'  : runner_idx,
+    })
+    abort_flag.set()
+
+    message = 'Match runner failed, exit code %d' % (runner.returncode)
+    raise utils.OpenBenchMatchRunnerFailedException(message, '\n'.join(output))
+
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 #                                                                           #
 #                                                                           #
@@ -1326,15 +1270,11 @@ def run_and_parse_runner(config, command, runner_idx, results_queue, abort_flag)
 def reload_local_imports():
 
     import bench
-    import genfens
     import isa_detector
-    import pgn_util
     import utils
 
     importlib.reload(bench)
-    importlib.reload(genfens)
     importlib.reload(isa_detector)
-    importlib.reload(pgn_util)
     importlib.reload(utils)
 
 def parse_arguments(client_args):
@@ -1381,18 +1321,13 @@ def run_openbench_worker(client_args):
     # If the client was updated, we must reload everything
     reload_local_imports()
 
-    fastchess_error  = '[Note] Unable to locate and/or build desired Fastchess version!'
     setup_error      = '[Note] Unable to establish initial connection with the Server!'
     connection_error = '[Note] Unable to reach the server to request a workload!'
 
     args   = parse_arguments(client_args) # Merge client.py and worker.py args
     config = Configuration(args)          # Holds System info, args, and Workload info
 
-    try_forever(server_configure_fastchess, [config], fastchess_error)
     try_forever(server_configure_worker, [config], setup_error)
-
-    if IS_LINUX:
-        set_runner_permissions()
 
     # Cleanup in case openbench.exit still exists
     if os.path.isfile('openbench.exit'):
@@ -1431,7 +1366,6 @@ def run_openbench_worker(client_args):
             time.sleep(TIMEOUT_ERROR)
             config = Configuration(args)
 
-            try_forever(server_configure_fastchess, [config], fastchess_error)
             try_forever(server_configure_worker, [config], setup_error)
 
         except Exception:

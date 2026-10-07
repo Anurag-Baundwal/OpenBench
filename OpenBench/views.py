@@ -44,7 +44,7 @@ from OpenSite.settings import MEDIA_ROOT
 
 from django.db import transaction
 from django.db.models import F, Q
-from django.http import HttpResponse, JsonResponse
+from django.http import FileResponse, HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.core.files.storage import FileSystemStorage
 from django.core.files.base import ContentFile
@@ -724,16 +724,6 @@ def client_version_ref(request):
     })
 
 @csrf_exempt
-def client_match_runner_version_ref(request):
-
-    # Enough information to build the right Fastchess version
-    return JsonResponse({
-        'fastchess_min_version' : OPENBENCH_CONFIG['fastchess_min_version'],
-        'fastchess_repo_url'    : OPENBENCH_CONFIG['fastchess_repo_url'],
-        'fastchess_repo_ref'    : OPENBENCH_CONFIG['fastchess_repo_ref'],
-    })
-
-@csrf_exempt
 def client_get_build_info(request):
 
     ## Information pulled from the config about how to build each engine.
@@ -783,8 +773,8 @@ def client_worker_info(request):
         if config.private and config.name not in machine.info['tokens'].keys():
             continue
 
-        # Public engines must have a compiler of a sufficient version
-        if not config.private and config.name not in machine.info['compilers'].keys():
+        # All engines, Public and Private, are built from source by the Client
+        if config.name not in machine.info['compilers'].keys():
             continue
 
         # Must match the Operating Systems supported by the engine
@@ -976,6 +966,22 @@ def api_configs(request, engine=None):
         return api_response(OpenBench.model_utils.engine_config_to_dict(config))
 
     return api_response({ 'error' : 'Engine not found. Check /api/config/ for a full list' })
+
+@csrf_exempt
+def api_books(request, name):
+
+    # Serves Books whose source points back at this server. Clients download
+    # them without credentials, as they did from Github, so this is not gated
+    # behind api_authenticate(). Only registered Books are served, and only from
+    # Books/, which keeps the name from being used to reach any other file.
+
+    if not (book_path := OpenBench.utils.local_book_path(name)):
+        return HttpResponse('Book not found', status=404)
+
+    if not Book.objects.filter(name=name, source=OpenBench.utils.local_book_source(name)).exists():
+        return HttpResponse('Book not found', status=404)
+
+    return FileResponse(open(book_path, 'rb'), as_attachment=True, filename=name)
 
 @csrf_exempt
 def api_networks(request, engine):

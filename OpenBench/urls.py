@@ -69,7 +69,6 @@ urlpatterns = [
 
     # Links for the Client to work with the Server
     django.urls.path(r'clientVersionRef/', OpenBench.views.client_version_ref),
-    django.urls.path(r'clientMatchRunnerVersionRef/', OpenBench.views.client_match_runner_version_ref),
     django.urls.path(r'clientGetBuildInfo/', OpenBench.views.client_get_build_info),
     django.urls.path(r'clientWorkerInfo/', OpenBench.views.client_worker_info),
     django.urls.path(r'clientGetWorkload/', OpenBench.views.client_get_workload),
@@ -83,6 +82,7 @@ urlpatterns = [
     django.urls.path(r'clientSubmitPGN/', OpenBench.views.client_submit_pgn),
 
     # Nice endpoints, which can be hit from the website or with credentials cleanly
+    django.urls.path(r'api/books/<str:name>/', OpenBench.views.api_books),
     django.urls.path(r'api/config/', OpenBench.views.api_configs),
     django.urls.path(r'api/config/<str:engine>/', OpenBench.views.api_configs),
     django.urls.path(r'api/networks/<str:engine>/', OpenBench.views.api_networks),

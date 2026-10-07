@@ -75,14 +75,10 @@ class OpenBenchFailedGenfensException(Exception):
         self.message = message
         super().__init__(self.message)
 
-class OpenBenchMisssingPGNException(Exception):
-    def __init__(self, message):
+class OpenBenchMatchRunnerFailedException(Exception):
+    def __init__(self, message, logs):
         self.message = message
-        super().__init__(self.message)
-
-class OpenBenchMatchRunnerBuildFailedException(Exception):
-    def __init__(self):
-        self.message = ''
+        self.logs    = logs
         super().__init__(self.message)
 
 
@@ -189,7 +185,7 @@ def makefile_command(net_path, make_path, out_path, compiler):
     return command
 
 
-def download_opening_book(book_sha, book_source, book_name):
+def download_opening_book(server, book_sha, book_source, book_name):
 
     book_path = os.path.join('Books', book_name)
 
@@ -202,27 +198,35 @@ def download_opening_book(book_sha, book_source, book_name):
 
         print ('Fetching Opening Book [%s]' % (book_name))
 
+        # Sources are either absolute (Github), or served by the OpenBench server
+        if not book_source.startswith(('https://', 'http://')):
+            book_source = url_join(server, book_source)
+
+        response = requests.get(book_source)
+        if response.status_code != 200:
+            raise OpenBenchCorruptedBookException(
+                'Unable to fetch %s (HTTP %d)' % (book_name, response.status_code))
+
         # Work with temp files and directories until finished extracting
         with tempfile.TemporaryDirectory() as temp_dir:
 
-            # Download the zip file from Github
-            zip_path = os.path.join(temp_dir, '%s.zip' % (book_name))
-            with open(zip_path, 'wb') as zip_file:
-                zip_file.write(requests.get(book_source).content)
+            download_path = os.path.join(temp_dir, book_name)
+            with open(download_path, 'wb') as fout:
+                fout.write(response.content)
 
-            # Unzip the book to a directory
-            unzip_path = os.path.join(temp_dir, book_name)
-            with zipfile.ZipFile(zip_path, 'r') as zip_file:
-                zip_file.extractall(unzip_path)
+            # Github hosted books are .zip files, containing only the book
+            if zipfile.is_zipfile(download_path):
+                unzip_path = os.path.join(temp_dir, 'unzipped')
+                with zipfile.ZipFile(download_path, 'r') as zip_file:
+                    zip_file.extractall(unzip_path)
+                download_path = os.path.join(unzip_path, os.listdir(unzip_path)[0])
 
-            # Rename the sole binary
-            unzip_root = os.path.join(unzip_path, os.listdir(unzip_path)[0])
-            shutil.move(unzip_root, book_path)
+            shutil.move(download_path, book_path)
 
-    # Verify SHAs match with the server
-    with open(book_path) as fin:
-        content = fin.read().encode('utf-8')
-        sha256  = hashlib.sha256(content).hexdigest()
+    # Verify SHAs match with the server. Read as bytes, so that line endings
+    # are never translated, and the sha is the same on every platform
+    with open(book_path, 'rb') as fin:
+        sha256 = hashlib.sha256(fin.read()).hexdigest()
 
     # Log SHAs on every workload
     print ('Correct  %s' % (book_sha.upper()))
