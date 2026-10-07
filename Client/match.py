@@ -70,6 +70,7 @@ NNUE_GAME_TERMINATIONS = {
     "no_legal_moves",
     "max_plies",
     "threefold_repetition",
+    "fifty_move_rule",
 }
 AUTO_NNUE_OUTPUT = "__auto_nnue_output__"
 NNUE_DATA_DEFAULT_GAMES = 50_000
@@ -1793,6 +1794,10 @@ def play_game(
                     record, "draw", "threefold_repetition",
                     moves, clocks, task.engine1_team
                 )
+            # After 200 plies without a capture or pawn move the game is drawn,
+            # unless the side to move is checkmated. A depth 1 search shows
+            # whether it has a move.
+            fifty_moves = position.rule50 >= 200
             legal = (
                 arbiter.legal_moves(moves, task.start.fen)
                 if arbiter is not None
@@ -1810,7 +1815,7 @@ def play_game(
                     search = engine.search(
                         moves,
                         task.start.fen,
-                        go_command(config, clocks),
+                        "go depth 1" if fifty_moves else go_command(config, clocks),
                         move_timeout(config, clocks, color),
                     )
                 except TimeoutError:
@@ -1851,6 +1856,10 @@ def play_game(
                     record, result or "draw",
                     "no_legal_moves_result" if result else "no_legal_moves",
                     moves, clocks, task.engine1_team
+                )
+            if fifty_moves:
+                return finish_game(
+                    record, "draw", "fifty_move_rule", moves, clocks, task.engine1_team
                 )
             # Clock time belongs to the moving color, not to its two-color team.
             if config.limit_kind == "clock":
@@ -2347,6 +2356,7 @@ def pgn4_termination(record: dict[str, Any]) -> str | None:
     labels = {
         "max_plies": "Draw due to max moves reached",
         "threefold_repetition": "Draw by repetition",
+        "fifty_move_rule": "Draw by 50-move rule",
         "no_legal_moves": "Draw due to no legal moves",
         "runner_error": "Runner error",
     }
@@ -2366,7 +2376,8 @@ def pgn4_terminal_marker(record: dict[str, Any]) -> str | None:
     result = effective_game_result(record)
     termination = str(record.get("termination", ""))
     if result == "draw":
-        return "D" if termination in {"max_plies", "threefold_repetition"} else "S"
+        draws = {"max_plies", "threefold_repetition", "fifty_move_rule"}
+        return "D" if termination in draws else "S"
     if result in {"ry_win", "bg_win"}:
         if termination.endswith("_time_loss") or termination.endswith("_timeout"):
             return "T"
