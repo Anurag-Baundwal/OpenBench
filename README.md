@@ -1,14 +1,15 @@
 # OpenBench for 4PC Teams
 
-This fork runs OpenBench tests for four-player teams chess engines, such as stockfish_4pc. The upstream documentation below still applies, with these differences:
+A fork of [OpenBench](https://github.com/AndyGrant/OpenBench) for testing four-player teams chess engines, such as stockfish_4pc. You create a test on the website, comparing two commits of the engine. Anyone with a registered account runs the Client on their machine, and their machines play games for it. The server combines the results into a single SPRT, or a fixed number of games.
 
-- Games are played by `match.py` from the `cluster-runner` branch of [this fork of 4pc_arena](https://github.com/Anurag-Baundwal/4pc_arena/tree/cluster-runner), which ships with the Client as `Client/match.py`. It replaces fastchess, so there is nothing to download or build for the match runner.
-- Openings come from `Books/fens.txt` (10,000 balanced 4PC FENs), served by the OpenBench server itself at `/api/books/fens.txt/`. The standard chess books are disabled.
-- Datagen, Syzygy and win/draw adjudication are not supported. `match.py` adjudicates games itself.
-- Time controls are `base+inc` in seconds (e.g. `10.0+0.1` for match.py's `--tc 10000 --inc 100`), scaled per machine by bench NPS as usual. `N=` nodes, `D=` depth and `MT=` movetime in milliseconds also work. Cyclic (`40/...`) time controls, and different time controls for Dev and Base, are rejected.
-- Results are reported as pentanomial pairs, and the SPRT uses normalized Elo, the same model as `match.py --sprt`.
+## How it works
 
-### Server
+- The **server** is a Django website. It stores tests, assigns work, and computes the SPRT. It needs no CPU power, so a small host such as PythonAnywhere is enough.
+- Each **worker** runs `Client/client.py`. For every workload it downloads both engine commits from GitHub and builds them with `make`. It checks each build's `bench`, then plays games with `match.py`, the 4pc_arena match runner, which ships with the Client.
+- Openings come from `Books/fens.txt`, 10,000 balanced 4PC FENs, which the server hosts itself. Every pair of games shares an opening, with the engines swapping teams, and every workload uses new openings.
+- Results are pentanomial pairs, and the SPRT uses normalized Elo, the same model as `match.py --sprt`.
+
+## Running the server
 
 ```
 pip install -r requirements.txt
@@ -17,28 +18,59 @@ python manage.py import_engines Engines/stockfish_4pc.json
 python manage.py runserver 0.0.0.0:8000
 ```
 
-stockfish_4pc is a private repository, so the server needs a GitHub token with read access to it in `Config/credentials.stockfish_4pc`. Register an account on the website, then enable it as an approver with `python manage.py shell -c "from OpenBench.models import Profile; Profile.objects.filter(user__username='NAME').update(enabled=True, approver=True, superuser=True)"`. Engine settings can be edited at `/manage/engines/`. Set `nps` to the "Speed for ..." your reference machine prints with its usual `-T`, so that time controls play unscaled there and proportionally longer on slower machines.
+- **Account:** register on the website, then enable your account as an approver:
+  `python manage.py shell -c "from OpenBench.models import Profile; Profile.objects.filter(user__username='NAME').update(enabled=True, approver=True, superuser=True)"`.
+  Enable other people's accounts from Django's admin at `/admin/`, after creating an admin login with `python manage.py createsuperuser`.
+- **Private engine:** stockfish_4pc is a private repository, so the server needs a GitHub token that can read it, saved as `Config/credentials.stockfish_4pc`. Use a fine-grained token with Contents: Read-only on that one repository.
+- **Engine settings:** edit these at `/manage/engines/`. Set `nps` to the "Speed for ..." line your reference machine prints with its usual `-T`. Time controls then play unscaled there, and proportionally longer on slower machines.
+- **Public deployments:** set the environment variables `OPENBENCH_SECRET_KEY` (your own random secret) and `OPENBENCH_DEBUG=false`, and serve `/static/` from `OpenBench/static/`.
+- **No threads:** uploaded PGNs are archived by a background thread. Hosts that don't allow threads in web apps, such as PythonAnywhere, never archive them, so leave Upload PGNs off there.
 
-Uploaded PGNs are archived by a background thread. Hosts that do not allow threads in web apps, such as PythonAnywhere, never archive them, so leave Upload PGNs off there.
+## Running a test
 
-### Workers
+Open **Create Test** and choose the Dev and Base branches, or full commit SHAs. The engine presets fill in the rest:
 
-Each worker needs Python 3.9+ with `pip install -r Client/requirements.txt`, `make`, a C++ compiler (`g++` or `clang++`), and the same token saved as `Client/credentials.stockfish_4pc`. Then, from `Client/`:
+- **Bench:** the node count of `./stockfish_4pc bench` for each commit. Either type it in, or end the commit message with `Bench: 1234567`, and OpenBench reads it from there.
+- **Time control:** `base+inc` in seconds, e.g. `10.0+0.1` is match.py's `--tc 10000 --inc 100`. `N=` nodes, `D=` depth and `MT=` movetime in milliseconds also work. Dev and Base must use the same time control, and cyclic (`40/...`) time controls are rejected.
+- **SPRT bounds:** normalized Elo, e.g. `[0.00, 3.00]`.
+
+## Contributing a machine
+
+Each worker needs:
+
+- Python 3.9+ with `pip install -r Client/requirements.txt`
+- `make` and a C++ compiler (`g++` or `clang++`)
+- a GitHub token that can read stockfish_4pc, saved as `Client/credentials.stockfish_4pc`
+- an enabled account on the server
+
+Then, from `Client/`:
 
 ```
-python client.py -U NAME -P PASSWORD -S http://SERVER:8000 -T 8 -N 1
+python client.py -U NAME -P PASSWORD -S https://SERVER -T 8 -N 1
 ```
+
+`-T` is the number of games played at once. Leave a core or two free for the system.
 
 - **Windows (MSYS2):** put `C:\msys64\ucrt64\bin` first on `PATH`, and `C:\msys64\usr\bin` (for `make`) last, then run the client with the full path to your Windows Python. If `ucrt64\bin` comes later, DLLs from other programs on `PATH` can make `g++` fail silently. MSYS2 also ships its own `python.exe`, which lacks the Client's packages.
-- **Termux:** `pkg install python clang make`, then `pip install -r Client/requirements.txt`.
+- **Termux:** `pkg install python clang make`, then `pip install -r Client/requirements.txt`. Run `termux-wake-lock` first, or Android may pause the worker.
 
-Every worker must produce the same `bench` node count for a given commit, since a mismatch stops the test. Check this on each new platform, e.g. ARM vs x86, before relying on it.
+Every machine must produce the same `bench` node count for a given commit, since a mismatch stops the test. Check this once on each new kind of machine, e.g. ARM vs x86, before relying on it.
 
-### Updating match.py
+To stop a worker cleanly, create a file named `openbench.exit` in `Client/`.
 
-Copy `match.py` from the `cluster-runner` branch of the 4pc_arena fork into `Client/`, then bump `client_version` in `Config/config.json` and `CLIENT_VERSION` in `Client/worker.py` together. Workers then update themselves from `client_repo_url`, which must point at this fork.
+## Differences from upstream OpenBench
+
+- `match.py` replaces fastchess, so there is nothing to download or build for the match runner.
+- The standard chess books are disabled in favor of `fens.txt`.
+- Datagen, Syzygy and win/draw adjudication are not supported. `match.py` adjudicates games itself.
+
+## Updating match.py
+
+Copy `match.py` from the `cluster-runner` branch of [the 4pc_arena fork](https://github.com/Anurag-Baundwal/4pc_arena/tree/cluster-runner) into `Client/`. Then bump `client_version` in `Config/config.json` and `CLIENT_VERSION` in `Client/worker.py` together. Workers update themselves from `client_repo_url`, which must point at this fork.
 
 ---
+
+## About OpenBench
 
 OpenBench is an open-source Chess Engine Testing Framework for UCI engines. OpenBench provides a lightweight interface and client to facilitate running fixed-game tests as well as SPRT tests to benchmark changes to engines for performance and stability. OpenBench supports [Fischer Random Chess](https://en.wikipedia.org/wiki/Chess960).
 
