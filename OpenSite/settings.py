@@ -19,8 +19,10 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # See https://docs.djangoproject.com/en/2.0/howto/deployment/checklist/
 # SECURITY WARNING: keep the secret key used in production secret!
 # SECURITY WARNING: don't run with debug turned on in production!
-SECRET_KEY = '@!zw2l8til1(0eb_nk+1w!(n78gqm&u)s)_v7#k6iseia@g9q0'
-DEBUG = True
+# Deployments set OPENBENCH_SECRET_KEY to their own secret, and OPENBENCH_DEBUG
+# to false. The defaults are only suitable for local development.
+SECRET_KEY = os.environ.get('OPENBENCH_SECRET_KEY', '@!zw2l8til1(0eb_nk+1w!(n78gqm&u)s)_v7#k6iseia@g9q0')
+DEBUG = os.environ.get('OPENBENCH_DEBUG', 'true').lower() != 'false'
 
 ALLOWED_HOSTS = ['*']
 
