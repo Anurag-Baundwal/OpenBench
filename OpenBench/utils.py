@@ -659,10 +659,10 @@ def update_test(request, machine):
 
     response = [{}, { 'stop' : True }][test.finished]
 
-    # Send the whole Test's results back, so that Workers can show more than
-    # their own games. Older Clients simply ignore this
+    # Send the whole Test's results back in Fastchess's style, so that Workers
+    # can show more than their own games. Older Clients simply ignore this
     if test.test_mode in ('SPRT', 'GAMES'):
         import OpenBench.templatetags.mytags
-        response['stats'] = OpenBench.templatetags.mytags.longStatBlock(test)
+        response['stats'] = OpenBench.templatetags.mytags.workerStatBlock(test)
 
     return response

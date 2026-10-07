@@ -19,6 +19,7 @@
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
 import django
+import math
 import re
 
 import OpenBench.config
@@ -114,6 +115,77 @@ def longStatBlock(test):
 
     if test.use_penta:
         lines.append('Penta | [%d, %d, %d, %d, %d]' % test.as_penta())
+
+    return '\n'.join(lines)
+
+def workerStatBlock(test):
+
+    # Fastchess style results, which Workers print beneath their own "Results of" line
+    #
+    #   Elo: -3.41 +/- 66.92, nElo: -3.57 +/- 67.43
+    #   LOS: 45.87 %, DrawRatio: 52.94 %, PairsRatio: 1.00
+    #   Games: 102, Wins: 50, Losses: 51, Draws: 1, Points: 50.5 (49.51 %)
+    #   Ptnml(0-2): [12, 0, 27, 1, 11]
+    #   LLR: -0.01 (-0.4%) (-2.94, 2.94) [0.00, 3.00]
+
+    assert test.test_mode != 'SPSA'
+
+    results = test.results()
+    penta   = len(results) == 5
+    games, wins, losses, draws = test.as_nwld()
+
+    # Elo is computed as on the Test's page, so that the two always agree
+    lower, elo, upper = OpenBench.stats.Elo(results)
+
+    # Mean score and its variance, per game pair for Pentanomial, scaled to [0, 1]
+    N   = sum(results)
+    div = len(results) - 1
+    mu  = sum(i / div * x for i, x in enumerate(results)) / N if N else 0.5
+    var = sum((i / div - mu) ** 2 * x for i, x in enumerate(results)) / N if N else 0.0
+
+    # nElo and LOS as Fastchess computes them. A pair's variance is doubled for nElo
+    if var > 0:
+        scale      = (800 / math.log(10)) / math.sqrt((2 if penta else 1) * var)
+        nelo       = (mu - 0.5) * scale
+        nelo_error = 1.959963984540054 * math.sqrt(var / N) * scale
+        los        = 0.5 * (1 + math.erf((mu - 0.5) / math.sqrt(2 * var / N)))
+
+    else: # Every result so far is identical, as when only one has been played
+        nelo, nelo_error = 0.0, 0.0
+        los = 1.0 if mu > 0.5 else 0.0 if mu < 0.5 else 0.5
+
+    # Fastchess shows "inf" or "nan" when nothing is being divided by
+    def ratio(a, b):
+        return a / b if b else math.inf if a else math.nan
+
+    # As in Fastchess, DrawRatio is the share of game pairs scoring one point for Pentanomial.
+    # The Test's DD count holds both Win-Loss and Draw-Draw pairs, which score the same
+    if penta:
+        LL, LD, DD, DW, WW = results
+        los_line = 'LOS: %.2f %%, DrawRatio: %.2f %%, PairsRatio: %.2f' % (
+            100 * los, 100 * ratio(DD, N), ratio(WW + DW, LL + LD))
+
+    else: # Fastchess counts drawn games when not reporting game pairs
+        los_line = 'LOS: %.2f %%, DrawRatio: %.2f %%' % (100 * los, 100 * ratio(draws, games))
+
+    points = wins + draws / 2
+    lines  = [
+        'Elo: %.2f +/- %.2f, nElo: %.2f +/- %.2f' % (elo, max(upper - elo, elo - lower), nelo, nelo_error),
+        los_line,
+        'Games: %d, Wins: %d, Losses: %d, Draws: %d, Points: %.1f (%.2f %%)' % (
+            games, wins, losses, draws, points, 100 * ratio(points, games)),
+    ]
+
+    # Fastchess's WL/DD Ratio is left out, since the Test does not count WL and DD apart
+    if penta:
+        lines.append('Ptnml(0-2): [%d, %d, %d, %d, %d]' % results)
+
+    # How far the LLR has moved toward the bound it is heading for, ie "-7.9%"
+    if test.test_mode == 'SPRT':
+        llr      = test.currentllr
+        progress = llr / test.upperllr if llr >= 0 else -llr / test.lowerllr
+        lines.append('LLR: %.2f (%.1f%%) (%.2f, %.2f) [%.2f, %.2f]' % (
+            llr, 100 * progress, test.lowerllr, test.upperllr, test.elolower, test.eloupper))
 
     return '\n'.join(lines)
 
