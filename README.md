@@ -38,7 +38,7 @@ Open **Create Test** and choose the Dev and Base branches, or full commit SHAs. 
 
 Each worker needs:
 
-- Python 3.9+ with `pip install -r Client/requirements.txt`
+- Python 3.9+ with `pip install -r Client/requirements.txt`, ideally in a venv (the top-level `requirements.txt` is only for the server)
 - `make` and a C++ compiler (`g++` or `clang++`)
 - a GitHub token that can read stockfish_4pc, saved as `Client/credentials.stockfish_4pc`
 - an enabled account on the server
@@ -46,10 +46,10 @@ Each worker needs:
 Then, from `Client/`:
 
 ```
-python client.py -U NAME -P PASSWORD -S https://SERVER -T 8
+python client.py -U NAME -P "PASSWORD" -S https://SERVER -T 8 -I MACHINE_NAME
 ```
 
-`-T` is the number of games played at once. Leave a core or two free for the system. `-N`, the number of CPU sockets, defaults to 1.
+`-T` is the number of games played at once. Leave a core or two free for the system. `-I` optionally names the machine on the `/machines/` page. `-N`, the number of CPU sockets, defaults to 1.
 
 - **Windows:** install [MSYS2](https://www.msys2.org/), then run `pacman -S --needed mingw-w64-ucrt-x86_64-gcc make` once in its UCRT64 terminal. Run the worker itself from a normal Command Prompt with your Windows Python. It finds MSYS2 in `C:\msys64` by itself (set `MSYS2_ROOT` if it's elsewhere) and puts its compilers first on its own `PATH`, since DLLs from other programs can otherwise make `g++` fail silently.
 - **Termux:** `pkg install python clang make`, then `pip install -r Client/requirements.txt`. Run `termux-wake-lock` first, or Android may pause the worker.
