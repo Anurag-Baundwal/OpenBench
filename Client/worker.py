@@ -57,11 +57,12 @@ from client import try_forever
 
 ## Basic configuration of the Client. These timeouts can be changed at will
 
-CLIENT_VERSION   = 55 # Client version to send to the Server
+CLIENT_VERSION   = 56 # Client version to send to the Server
 TIMEOUT_HTTP     = 30 # Timeout in seconds for HTTP requests
 TIMEOUT_ERROR    = 60 # Timeout in seconds when any errors are thrown
 TIMEOUT_WORKLOAD = 60 # Timeout in seconds between workload requests
 REPORT_INTERVAL  = 30 # Seconds between reports to the Server
+RATING_INTERVAL  = 10 # Game pairs between printing the Test's results, as in Fastchess
 
 IS_WINDOWS = platform.system() == 'Windows' # Don't touch this
 IS_LINUX   = platform.system() != 'Windows' # Don't touch this
@@ -696,6 +697,10 @@ class ResultsReporter(object):
         self.last_report = 0
         self.pending     = []
 
+        self.pairs_sent    = 0    # Game pairs this Worker has reported, for this Workload
+        self.pairs_printed = 0    # Game pairs reported when the Test's results were last printed
+        self.stats         = None # The Test's latest results from the Server, if not yet printed
+
         # Don't report until finished, for BULK SPSA tests
         self.bulk = self.config.workload['test']['type'] == 'SPSA'
         self.bulk = self.bulk and self.config.workload['reporting_type'] == 'BULK'
@@ -714,7 +719,7 @@ class ResultsReporter(object):
 
             # Send results, or a heartbeat, every REPORT_INTERVAL seconds until done
             if self.send_results(report_interval=REPORT_INTERVAL):
-                return
+                return self.print_stats()
 
             # Kill everything if openbench.exit is created
             if os.path.isfile('openbench.exit'):
@@ -733,8 +738,9 @@ class ResultsReporter(object):
             else:
                 break
 
-        # Send any remaining results immediately
+        # Send any remaining results immediately, and show where the Test now stands
         self.send_results(report_interval=0, final_report=True)
+        self.print_stats()
 
     def send_results(self, report_interval, final_report=False):
 
@@ -752,11 +758,15 @@ class ResultsReporter(object):
             else: # Send all of the queued Results at once
                 response = ServerReporter.report_results(self.config, self.pending).json()
                 self.last_report = time.time()
+                self.pairs_sent += sum(sum(result['pentanomial']) for result in self.pending)
                 self.pending = []
 
-                # The Server replies with the whole Test's results, from every Worker
+                # The Server replies with the whole Test's results, from every Worker.
+                # Print them every RATING_INTERVAL game pairs, and when the Workload ends
                 if 'stats' in response:
-                    print('\nTest #%d, all workers:\n%s\n' % (self.config.workload['test']['id'], response['stats']))
+                    self.stats = response['stats']
+                    if self.pairs_sent // RATING_INTERVAL > self.pairs_printed // RATING_INTERVAL:
+                        self.print_stats()
 
             # If the test ended, kill all tasks
             if 'stop' in response:
@@ -772,6 +782,54 @@ class ResultsReporter(object):
             traceback.print_exc()
             print ('[Note] Failed to upload results to server...')
             self.last_report = time.time()
+
+    def print_stats(self):
+
+        if not self.stats:
+            return
+
+        # Framed like Fastchess's results, which OpenBench Workers showed per Workload
+        separator = '-' * 50
+        lines     = [separator, self.results_header(), self.stats, separator]
+
+        # One write, so that the lines of finished game pairs cannot split the block
+        sys.stdout.write('\n'.join(lines) + '\n')
+        sys.stdout.flush()
+
+        self.pairs_printed = self.pairs_sent
+        self.stats         = None
+
+    def results_header(self):
+
+        # Fastchess style, ie "Results of dev vs base (10+0.1, 1t, 64MB, book.txt):"
+        test = self.config.workload['test']
+
+        # Fastchess shows "1t - 2t" when the engines differ, and one value when they match
+        def both(dev, base):
+            return dev if dev == base else '%s - %s' % (dev, base)
+
+        def option(branch, name):
+            match = re.search(r'(?<!\S)%s=(\S+)' % (name), test[branch]['options'])
+            return match.group(1) if match else '?'
+
+        # Shortened as in Fastchess, ie "10.0+0.10" becomes "10+0.1". Others are left as is
+        def time_control(branch):
+            match = re.fullmatch(r'(\d*\.?\d+)(\+(\d*\.?\d+))?', test[branch]['time_control'])
+            if not match:
+                return test[branch]['time_control']
+            base, inc = float(match.group(1)), float(match.group(3) or 0)
+            return '%g+%g' % (base, inc) if inc else '%g' % (base)
+
+        fields = [
+            both(time_control('dev'), time_control('base')),
+            both(option('dev', 'Threads') + 't', option('base', 'Threads') + 't'),
+            both(option('dev', 'Hash') + 'MB', option('base', 'Hash') + 'MB'),
+        ]
+
+        if test['book']['name'].upper() != 'NONE':
+            fields.append(test['book']['name'])
+
+        return 'Results of %s vs %s (%s):' % (test['dev']['name'], test['base']['name'], ', '.join(fields))
 
     def send_errors(self, timestamp, runner_cnt):
 
