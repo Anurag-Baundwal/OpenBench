@@ -281,10 +281,19 @@ def prepare_engine(engine, net_path, branch, source, make_path, out_path, privat
 
         print('Building [%s-%s]' % (engine, branch))
 
-        # Download the zip file from Github
+        # Download the zip file from Github. Errors, such as a bad token in the
+        # credentials file, come back as a JSON message instead of a .zip
+        response = requests.get(source, headers=headers)
+        if response.status_code != 200:
+            try: reason = response.json().get('message', '')
+            except ValueError: reason = ''
+            raise Exception('Unable to download [%s-%s] from Github: HTTP %d %s%s' % (
+                engine, branch, response.status_code, reason,
+                '. Check credentials.%s' % (engine.replace(' ', '').lower()) if private else ''))
+
         zip_path = os.path.join(temp_dir, '%s-tmp' % (engine))
         with open(zip_path, 'wb') as zip_file:
-            zip_file.write(requests.get(source, headers=headers).content)
+            zip_file.write(response.content)
 
         # Unzip the engine to a directory called <engine>
         unzip_path = os.path.join(temp_dir, engine)
