@@ -12,7 +12,7 @@
 
     "test_presets" : {
         "default" : {
-            "base_branch"       : "dev",
+            "base_branch"       : "nnue",
             "both_options"      : "Threads=1 Hash=128",
             "both_time_control" : "10.0+0.1",
             "test_bounds"       : "[0.00, 3.00]",
