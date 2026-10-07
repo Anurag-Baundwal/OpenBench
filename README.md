@@ -62,11 +62,11 @@ To stop a worker cleanly, create a file named `openbench.exit` in `Client/`.
 
 - `match.py` replaces fastchess, so there is nothing to download or build for the match runner.
 - The standard chess books are disabled in favor of `fens.txt`.
-- Datagen, Syzygy and win/draw adjudication are not supported. `match.py` adjudicates games itself.
+- Datagen, Syzygy and win/draw adjudication are not supported. `match.py` itself draws games by threefold repetition, the fifty-move rule (200 plies) and its 1000-ply limit. Checkmate, stalemate and king captures are taken from the engines, which report when they have no legal move.
 
 ## Updating match.py
 
-Copy `match.py` from the `cluster-runner` branch of [the 4pc_arena fork](https://github.com/Anurag-Baundwal/4pc_arena/tree/cluster-runner) into `Client/`. Then bump `client_version` in `Config/config.json` and `CLIENT_VERSION` in `Client/worker.py` together. Workers update themselves from `client_repo_url`, which must point at this fork.
+`Client/match.py` began as a copy of `match.py` from [the 4pc_arena fork](https://github.com/Anurag-Baundwal/4pc_arena/tree/cluster-runner), but is now maintained here, so change it in place. After changing anything in `Client/`, bump `client_version` in `Config/config.json` and `CLIENT_VERSION` in `Client/worker.py` together. Workers update themselves from `client_repo_url`, which must point at this fork.
 
 ---
 
