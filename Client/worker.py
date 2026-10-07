@@ -57,7 +57,7 @@ from client import try_forever
 
 ## Basic configuration of the Client. These timeouts can be changed at will
 
-CLIENT_VERSION   = 58 # Client version to send to the Server
+CLIENT_VERSION   = 59 # Client version to send to the Server
 TIMEOUT_HTTP     = 30 # Timeout in seconds for HTTP requests
 TIMEOUT_ERROR    = 60 # Timeout in seconds when any errors are thrown
 TIMEOUT_WORKLOAD = 60 # Timeout in seconds between workload requests
@@ -1421,6 +1421,17 @@ def format_cli_options(worker_args):
     return ' '.join(options)
 
 def run_openbench_worker(client_args):
+
+    # Ctrl+C ends up here, after any match runners and their engines were killed.
+    # Say so, rather than exiting silently, and let client.py finish exiting
+    try:
+        work_until_stopped(client_args)
+
+    except KeyboardInterrupt:
+        print('\nWorker stopped cleanly.')
+        raise
+
+def work_until_stopped(client_args):
 
     # If the client was updated, we must reload everything
     reload_local_imports()
