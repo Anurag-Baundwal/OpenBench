@@ -86,11 +86,14 @@ def kill_process_by_name(process_name):
 
     process_name = os.path.basename(process_name)
 
+    # Usually the process has already exited, so hide the complaints about not finding it
+    quiet = { 'stdout' : subprocess.DEVNULL, 'stderr' : subprocess.DEVNULL }
+
     if IS_LINUX:
-        subprocess.run(['pkill', '-KILL', '-f', process_name])
+        subprocess.run(['pkill', '-KILL', '-f', process_name], **quiet)
 
     if IS_WINDOWS:
-        subprocess.run(['taskkill', '/f', '/im', process_name])
+        subprocess.run(['taskkill', '/f', '/im', process_name], **quiet)
 
 def url_join(*args, trailing_slash=True):
 
