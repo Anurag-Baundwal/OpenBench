@@ -1371,13 +1371,17 @@ def go_command(config: MatchConfig, clocks: dict[str, int]) -> str:
         return f"go {times} {increments} silent"
     return f"go {config.limit_kind} {config.limit_value} silent"
 
-# Gives clock searches the active color's remaining time plus the configured
-# response grace. Fixed-limit searches use the response timeout directly.
+# Gives clock searches the active color's remaining time, and movetime searches
+# their fixed time, plus the configured response grace. Node and depth searches
+# have no time bound, so, as with fastchess, they wait for bestmove without a
+# deadline. An engine that exits still ends the wait.
 def move_timeout(config: MatchConfig, clocks: dict[str, int], color: str) -> float:
-    if config.limit_kind != "clock":
-        return config.timeout
-    remaining = max(0, clocks[color]) + max(0, config.margin_ms)
-    return remaining / 1000 + config.timeout
+    if config.limit_kind == "clock":
+        remaining = max(0, clocks[color]) + max(0, config.margin_ms)
+        return remaining / 1000 + config.timeout
+    if config.limit_kind == "movetime":
+        return config.limit_value / 1000 + config.timeout
+    return math.inf
 
 # Returns the opposing team result after a time, protocol, or move failure.
 def winner_for_failure(team: str) -> str:
@@ -3172,8 +3176,9 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=30.0,
         help=(
-            "engine response timeout in seconds; with --tc, this is grace time "
-            "after the active color's remaining clock"
+            "engine response timeout in seconds; with --tc or --movetime, this "
+            "is grace time after the active color's remaining clock or the move "
+            "time, while --nodes and --depth searches wait without a deadline"
         ),
     )
     parser.add_argument("--max-plies", "--maxmoves", type=int, default=1000)
