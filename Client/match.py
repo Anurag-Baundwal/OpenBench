@@ -40,6 +40,24 @@ UCI_CLOCK_PREFIX = {
     "green": "g",
 }
 FINAL_RESULTS = {"ry_win", "bg_win", "draw"}
+# Stockfish 4PC's startpos, which games without a FEN start from.
+START_FEN = (
+    "R-0,0,0,0-1,1,1,1-1,1,1,1-0,0,0,0-0-"
+    "x,x,x,yR,yN,yB,yK,yQ,yB,yN,yR,x,x,x/"
+    "x,x,x,yP,yP,yP,yP,yP,yP,yP,yP,x,x,x/"
+    "x,x,x,8,x,x,x/"
+    "bR,bP,10,gP,gR/"
+    "bN,bP,10,gP,gN/"
+    "bB,bP,10,gP,gB/"
+    "bQ,bP,10,gP,gK/"
+    "bK,bP,10,gP,gQ/"
+    "bB,bP,10,gP,gB/"
+    "bN,bP,10,gP,gN/"
+    "bR,bP,10,gP,gR/"
+    "x,x,x,8,x,x,x/"
+    "x,x,x,rP,rP,rP,rP,rP,rP,rP,rP,x,x,x/"
+    "x,x,x,rR,rN,rB,rQ,rK,rB,rN,rR,x,x,x"
+)
 NORMALIZED_ELO_SCALE = 800 / math.log(10)
 NORMAL_95_Z = 1.959963984540054
 SPRT_REPORT_SEPARATOR = "----------------------------------------------"
@@ -51,6 +69,7 @@ NNUE_GAME_TERMINATIONS = {
     "no_legal_moves_result",
     "no_legal_moves",
     "max_plies",
+    "threefold_repetition",
 }
 AUTO_NNUE_OUTPUT = "__auto_nnue_output__"
 NNUE_DATA_DEFAULT_GAMES = 50_000
@@ -1138,6 +1157,194 @@ def fen_turn_index(fen: str | None) -> int:
     token = fen.split("-", 1)[0].strip().lower()
     return {"r": 0, "b": 1, "y": 2, "g": 3}.get(token[:1], 0)
 
+# Numbers squares as Stockfish 4PC does, rank * 16 + file, with files a-n and
+# ranks 1-14 both counted from 1.
+def square_index(name: str) -> int:
+    return int(name[1:]) * 16 + ord(name[0]) - ord("a") + 1
+
+# The board is 14x14 without its four 3x3 corners.
+def on_board(square: int) -> bool:
+    file, rank = square & 15, square >> 4
+    return 1 <= file <= 14 and 1 <= rank <= 14 and (
+        4 <= file <= 11 or 4 <= rank <= 11
+    )
+
+# Follows a game's position as its moves are played, so the runner can judge
+# repetitions itself rather than ask an engine. It applies moves exactly as
+# Stockfish 4PC's do_move() does, including castling rights and en passant
+# squares, and trusts the engines' legality checks for everything else.
+class PositionTracker:
+    COLORS = "rbyg"
+    # Red, Blue, Yellow and Green push their pawns north, east, south and west.
+    PAWN_PUSH = (16, 1, -16, -1)
+    # Each color's two castling rook squares, on its back rank or file.
+    ROOK_SQUARES = tuple(
+        (square_index(first), square_index(second))
+        for first, second in (("d1", "k1"), ("a4", "a11"), ("d14", "k14"), ("n4", "n11"))
+    )
+    MOVE = re.compile(r"([a-n])(\d{1,2})([a-n])(\d{1,2})([nbrq]?)")
+
+    # Parses a four-player FEN the way Stockfish 4PC's Position::set() does.
+    def __init__(self, fen: str | None) -> None:
+        parts = (fen or START_FEN).strip().split("-")
+        self.side = {"R": 0, "B": 1, "Y": 2, "G": 3}.get(parts[0], 0)
+
+        # Castling flags, kingside then queenside, in the order R, B, Y, G
+        flags = 0
+        for side_bit, field in ((0, 2), (1, 3)):
+            if len(parts) > field:
+                for color, value in enumerate(parts[field].split(",")[:4]):
+                    if value == "1":
+                        flags |= 1 << (color * 2 + side_bit)
+
+        try:
+            self.rule50 = int(parts[5]) if len(parts) > 5 else 0
+        except ValueError:
+            self.rule50 = 0
+
+        board_text = ep_text = ""
+        if len(parts) == 8:
+            ep_text, board_text = parts[6], parts[7]
+        elif len(parts) == 7:
+            if "/" in parts[6]:
+                board_text = parts[6]
+            else:
+                ep_text = parts[6]
+
+        # En passant targets, ie {'enPassant':('d3:d4','','','')}
+        self.ep: list[int | None] = [None] * 4
+        start, end = ep_text.find("("), ep_text.find(")")
+        if "enPassant" in ep_text and start != -1 and end != -1:
+            for color, token in enumerate(ep_text[start + 1 : end].split(",")[:4]):
+                match = re.match(r"'?([a-n])(\d+)", token)
+                if match and 1 <= int(match[2]) <= 14:
+                    self.ep[color] = square_index(match[1] + match[2])
+
+        # Rows run from rank 14 down to rank 1, as comma separated cells
+        self.board: dict[int, str] = {}
+        for rank, row in zip(range(14, 0, -1), board_text.lstrip(" ").split("/")):
+            file = 1
+            for cell in row.split(","):
+                if file > 14:
+                    break
+                if cell == "x":
+                    file += 1
+                elif cell[:1].isdigit():
+                    file += int(re.match(r"\d+", cell)[0])
+                elif len(cell) == 2:
+                    if cell[0] in self.COLORS and cell[1] in "PNBRQK":
+                        self.board[rank * 16 + file] = cell
+                    file += 1
+
+        # A flag only grants castling with a rook 3 (kingside) or 4 (queenside)
+        # squares from the king. Moving either piece, or capturing the rook,
+        # removes the right.
+        self.rooks: dict[int, int] = {}
+        self.rights_lost: dict[int, int] = {}
+        for color, letter in enumerate(self.COLORS):
+            kings = [
+                square for square, piece in self.board.items() if piece == letter + "K"
+            ]
+            if len(kings) != 1:
+                continue
+            king = kings[0]
+            for rook in self.ROOK_SQUARES[color]:
+                if self.board.get(rook) != letter + "R":
+                    continue
+                if color % 2 == 0:
+                    distance = abs((rook & 15) - (king & 15))
+                else:
+                    distance = abs((rook >> 4) - (king >> 4))
+                if distance not in (3, 4):
+                    continue
+                right = 1 << (color * 2 + distance - 3)
+                if flags & right:
+                    self.rooks[right] = rook
+                    for square in (king, rook):
+                        lost = self.rights_lost.get(square, 0)
+                        self.rights_lost[square] = lost | right
+        self.castling = flags & sum(self.rooks)
+
+    # Identifies the position for repetitions: the pieces, the side to move,
+    # castling rights and en passant squares, as in Stockfish 4PC's hash key.
+    def key(self) -> tuple[Any, ...]:
+        return (self.side, self.castling, tuple(self.ep), frozenset(self.board.items()))
+
+    # Plays one move in UCI notation. Raises ValueError for a move that cannot
+    # be played at all, such as one that moves another color's piece.
+    def play(self, move: str) -> None:
+        match = self.MOVE.fullmatch(move)
+        if match is None:
+            raise ValueError(f"Malformed move: {move}")
+        source = square_index(match[1] + match[2])
+        target = square_index(match[3] + match[4])
+        us = self.side
+        piece = self.board.get(source)
+        team = (self.COLORS[us], self.COLORS[(us + 2) % 4])
+        if (
+            not on_board(source)
+            or not on_board(target)
+            or piece is None
+            or piece[0] != self.COLORS[us]
+            or self.board.get(target, " ")[0] in team
+        ):
+            raise ValueError(f"{move} does not move a piece of the side to move")
+
+        push = self.PAWN_PUSH[us]
+        step = target - source
+        # Castling moves the king two squares along its back rank or file. The
+        # rook comes from the side the king moves towards
+        rook = None
+        if piece[1] == "K" and abs(step) == (2 if us % 2 == 0 else 32):
+            right = 1 << (us * 2 + 1)
+            kingside = self.rooks.get(1 << (us * 2))
+            if kingside is not None and (target > source) == (kingside > source):
+                right = 1 << (us * 2)
+            rook = self.rooks.get(right)
+            if rook is None or not self.castling & right:
+                raise ValueError(f"{move} castles without the right to")
+        # A diagonal pawn move onto an enemy en passant square always captures
+        # en passant, even if another piece stands there
+        en_passant = piece[1] == "P" and step not in (push, 2 * push) and any(
+            self.ep[color] == target for color in range(4) if color % 2 != us % 2
+        )
+        previous_ep = list(self.ep)
+
+        # Our own en passant square expires, as does any square whose pawn is
+        # captured or moves
+        self.rule50 += 1
+        self.ep[us] = None
+        for color, square in enumerate(self.ep):
+            if square is not None:
+                victim = square + self.PAWN_PUSH[color]
+                if victim in (source, target) or (en_passant and square == target):
+                    self.ep[color] = None
+
+        if rook is not None:
+            # The rook lands on the square the king passes over
+            self.board[(source + target) // 2] = self.board.pop(rook)
+        else:
+            if target in self.board:
+                self.rule50 = 0
+            if en_passant:
+                for color in range(4):
+                    if color != us and previous_ep[color] == target:
+                        self.board.pop(target + self.PAWN_PUSH[color], None)
+                        break
+        self.board[target] = piece
+        del self.board[source]
+
+        if piece[1] == "P":
+            if step == 2 * push:
+                self.ep[us] = source + push
+            elif match[5]:
+                self.board[target] = piece[0] + match[5].upper()
+            self.rule50 = 0
+
+        for square in (source, target):
+            self.castling &= ~self.rights_lost.get(square, 0)
+        self.side = (us + 1) % 4
+
 # Captures enough executable and option identity to reject incompatible resume
 # attempts without hashing a potentially large binary on every invocation.
 def engine_signature(config: EngineConfig) -> dict[str, Any]:
@@ -1547,6 +1754,20 @@ def play_game(
             engines.append(arbiter)
         for engine in engines:
             engine.new_game()
+
+        # Counts every position of the game, opening included, to recognize
+        # repetitions without relying on the engines.
+        position = PositionTracker(task.start.fen)
+        repetitions: dict[tuple[Any, ...], int] = {}
+
+        def count_position() -> int:
+            key = position.key()
+            repetitions[key] = repetitions.get(key, 0) + 1
+            return repetitions[key]
+
+        for move in task.start.opening_moves:
+            count_position()
+            position.play(move)
         while len(moves) < config.max_plies:
             if stop_event.is_set():
                 raise MatchInterrupted("Match interrupted")
@@ -1565,6 +1786,13 @@ def play_game(
                     raise EngineError(
                         f"{arbiter.label} returned an invalid game result: {result}"
                     )
+            # The third occurrence of a position with the same color to move
+            # draws the game.
+            if count_position() >= 3:
+                return finish_game(
+                    record, "draw", "threefold_repetition",
+                    moves, clocks, task.engine1_team
+                )
             legal = (
                 arbiter.legal_moves(moves, task.start.fen)
                 if arbiter is not None
@@ -1634,7 +1862,15 @@ def play_game(
                         moves, clocks, task.engine1_team
                     )
                 clocks[color] += config.increment_ms
-            if legal is not None and search.bestmove not in legal:
+            # The tracker refuses only moves that no position allows, such as
+            # moving another color's piece
+            illegal = legal is not None and search.bestmove not in legal
+            if not illegal:
+                try:
+                    position.play(search.bestmove)
+                except ValueError:
+                    illegal = True
+            if illegal:
                 result = winner_for_failure(team)
                 return finish_game(
                     record, result, f"engine{engine_number}_illegal_move",
@@ -2110,6 +2346,7 @@ def pgn4_termination(record: dict[str, Any]) -> str | None:
         return None
     labels = {
         "max_plies": "Draw due to max moves reached",
+        "threefold_repetition": "Draw by repetition",
         "no_legal_moves": "Draw due to no legal moves",
         "runner_error": "Runner error",
     }
@@ -2129,7 +2366,7 @@ def pgn4_terminal_marker(record: dict[str, Any]) -> str | None:
     result = effective_game_result(record)
     termination = str(record.get("termination", ""))
     if result == "draw":
-        return "D" if termination == "max_plies" else "S"
+        return "D" if termination in {"max_plies", "threefold_repetition"} else "S"
     if result in {"ry_win", "bg_win"}:
         if termination.endswith("_time_loss") or termination.endswith("_timeout"):
             return "T"
