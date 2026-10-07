@@ -1,6 +1,6 @@
 {
     "private" : true,
-    "nps"     : 650000,
+    "nps"     : 800000,
     "source"  : "https://github.com/Anurag-Baundwal/stockfish_4pc",
 
     "build" : {
