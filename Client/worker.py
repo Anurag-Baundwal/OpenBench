@@ -47,6 +47,7 @@ from concurrent.futures import ThreadPoolExecutor
 ## Local imports must also be done in reload_local_imports()
 
 import bench
+import datagen
 import isa_detector
 import utils
 
@@ -57,7 +58,7 @@ from client import try_forever
 
 ## Basic configuration of the Client. These timeouts can be changed at will
 
-CLIENT_VERSION   = 62 # Client version to send to the Server
+CLIENT_VERSION   = 63 # Client version to send to the Server
 TIMEOUT_HTTP     = 30 # Timeout in seconds for HTTP requests
 TIMEOUT_ERROR    = 60 # Timeout in seconds when any errors are thrown
 TIMEOUT_WORKLOAD = 60 # Timeout in seconds between workload requests
@@ -155,7 +156,7 @@ class Configuration:
         os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
         # Ensure the folder structure for ease of coding
-        for folder in ['PGNs', 'Engines', 'Networks', 'Books']:
+        for folder in ['PGNs', 'Engines', 'Networks', 'Books', 'Datagen']:
             if not os.path.isdir(folder):
                 os.mkdir(folder)
 
@@ -1113,10 +1114,9 @@ def server_request_workload(config):
 
 def complete_workload(config):
 
-    # The match runner cannot generate the openings that Datagen relies on
+    # Datagen Workloads run the engine's own training data generator, not games
     if config.workload['test']['type'] == 'DATAGEN':
-        config.blacklist.append(config.workload['test']['id'])
-        raise Exception('Datagen Workloads are not supported by the 4pc_arena match runner')
+        return complete_datagen_workload(config)
 
     # Download the opening book, throws an exception on corruption
     utils.download_opening_book(
@@ -1195,6 +1195,70 @@ def complete_workload(config):
             for failure in failures:
                 ServerReporter.report_engine_error(config, failure.message, failure.logs)
             raise failures[0]
+
+def complete_datagen_workload(config):
+
+    # Download the opening book, throws an exception on corruption
+    utils.download_opening_book(
+        config.server,
+        config.workload['test']['book']['sha'   ],
+        config.workload['test']['book']['source'],
+        config.workload['test']['book']['name'  ],
+    )
+
+    # Download each NNUE file, throws an exception on corruption
+    dev_network  = safe_download_network_weights(config, 'dev' )
+    base_network = safe_download_network_weights(config, 'base')
+
+    # Build or download each engine, or exit if an error occured
+    dev_name  = safe_download_engine(config, 'dev' , dev_network )
+    base_name = safe_download_engine(config, 'base', base_network)
+
+    # Verify both benches and report this machine's speed. Nodes are never scaled
+    determine_scale_factor(config, dev_name, base_name)
+
+    book_path   = datagen.datagen_book(config)
+    output_name = datagen.datagen_output_name(config)
+    data_path   = output_name + '.bin'
+    commands    = datagen.datagen_commands(config, book_path, output_name)
+
+    print('\nLaunching generate_training_data...\n%s\n' % ('\n'.join(commands)))
+
+    # True once the Server says that the Test has finished
+    def heartbeat():
+        try: return 'stop' in ServerReporter.report_heartbeat(config).json()
+        except (BadVersionException, utils.OpenBenchFatalWorkerException): raise
+        except Exception:
+            traceback.print_exc()
+            print ('[Note] Failed to send a heartbeat to the server...')
+            return False
+
+    # An engine that fails still leaves complete data behind, which is reported first
+    try:
+        datagen.run_datagen(dev_name, commands, data_path, heartbeat, REPORT_INTERVAL)
+        failure = None
+    except utils.OpenBenchFailedDatagenException as error:
+        failure = error
+
+    positions, trinomial = datagen.read_datagen_results(data_path)
+    print('Datagen: %d positions from %d games, kept in %s.xz' % (positions, sum(trinomial), data_path))
+
+    if sum(trinomial):
+        ServerReporter.report_results(config, [{
+            'trinomial'   : trinomial,
+            'pentanomial' : [0, 0, 0, 0, 0],
+            'crashes'     : int(failure is not None),
+            'timelosses'  : 0,
+            'illegals'    : 0,
+        }])
+
+    datagen.compress_datagen_file(data_path)
+
+    # Report the failure, and stop taking this Workload
+    if failure:
+        config.blacklist.append(config.workload['test']['id'])
+        ServerReporter.report_engine_error(config, failure.message, failure.logs)
+        raise failure
 
 def safe_download_network_weights(config, branch):
 
@@ -1375,10 +1439,12 @@ def run_and_parse_runner(config, command, runner_idx, results_queue, abort_flag,
 def reload_local_imports():
 
     import bench
+    import datagen
     import isa_detector
     import utils
 
     importlib.reload(bench)
+    importlib.reload(datagen)
     importlib.reload(isa_detector)
     importlib.reload(utils)
 

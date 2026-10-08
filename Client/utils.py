@@ -75,6 +75,12 @@ class OpenBenchFailedGenfensException(Exception):
         self.message = message
         super().__init__(self.message)
 
+class OpenBenchFailedDatagenException(Exception):
+    def __init__(self, message, logs):
+        self.message = message
+        self.logs    = logs
+        super().__init__(self.message)
+
 class OpenBenchMatchRunnerFailedException(Exception):
     def __init__(self, message, logs):
         self.message = message

@@ -31,6 +31,16 @@
     },
 
     "datagen_presets" : {
-        "default" : {}
+        "default" : {
+            "both_branch"            : "tools/datagen-nnuedat2",
+            "both_options"           : "Threads=1 Hash=16",
+            "both_time_control"      : "N=5000",
+            "book_name"              : "fens.txt",
+            "upload_pgns"            : "FALSE",
+            "workload_size"          : "128",
+            "datagen_max_games"      : "100000",
+            "datagen_custom_genfens" : "random_move_min_ply 1 random_move_max_ply 8 random_move_count 8 random_multi_pv 3 random_multi_pv_diff 250 random_multi_pv_nodes 2000 write_min_ply 8 write_max_ply 1000 eval_limit 32000",
+            "datagen_play_reverses"  : "NO"
+        }
     }
 }

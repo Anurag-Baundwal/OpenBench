@@ -34,6 +34,24 @@ Open **Create Test** and choose the Dev and Base branches, or full commit SHAs. 
 - **Time control:** `base+inc` in seconds, e.g. `10.0+0.1` is match.py's `--tc 10000 --inc 100`. `N=` nodes, `D=` depth and `MT=` movetime in milliseconds also work. Dev and Base must use the same time control, and cyclic (`40/...`) time controls are rejected.
 - **SPRT bounds:** normalized Elo, e.g. `[0.00, 3.00]`.
 
+## Generating training data
+
+Open **Create Datagen**. The engine preset fills in the measured settings:
+- the branch `tools/datagen-nnuedat2`, which has the engine's `generate_training_data`;
+- `N=5000` and `Threads=1 Hash=16`;
+- the opening randomization, in **Datagen Args**.
+
+The time control must be `N=` or `D=`.
+
+- **What a workload does:** it runs the engine's own `generate_training_data`, the training data generator of Stockfish's tools branch, with one game per thread and a seed of its own.
+- **When it ends:** workers report the games they finished, and the test ends at **Max Games**. A game writes about 100 positions, so 1,400,000 games is about 140M positions.
+- **Where the data goes:** it stays on each worker, in `Client/Datagen/<test id>/`, as NNUEDAT2 files compressed with xz, at about 10.5 bytes per position. Nothing is uploaded, since the server couldn't store it.
+- **Collecting it:** copy the `Datagen/` folders from every machine, then run `python Scripts/datagen_collect.py <folders...> --out data --validation 1000000` (it needs numpy). It:
+  - unpacks the files into `data/train/` and `data/validation/`, for the trainer;
+  - keeps each position only once;
+  - never puts a position in both folders.
+- **Datagen Args:** extra options of `generate_training_data`. The worker sets the book, count, seed and output file itself.
+
 ## Contributing a machine
 
 Each worker needs:
@@ -62,7 +80,8 @@ To stop a worker cleanly, create a file named `openbench.exit` in `Client/`.
 
 - `match.py` replaces fastchess, so there is nothing to download or build for the match runner.
 - The standard chess books are disabled in favor of `fens.txt`.
-- Datagen, Syzygy and win/draw adjudication are not supported. `match.py` itself draws games by threefold repetition, the fifty-move rule (200 plies) and its 1000-ply limit. Checkmate, stalemate and king captures are taken from the engines, which report when they have no legal move.
+- Datagen runs the engine's own `generate_training_data`, rather than genfens openings and games, and the data stays on the workers rather than being uploaded as PGNs.
+- Syzygy and win/draw adjudication are not supported. `match.py` itself draws games by threefold repetition, the fifty-move rule (200 plies) and its 1000-ply limit. Checkmate, stalemate and king captures are taken from the engines, which report when they have no legal move.
 
 ## Updating match.py
 

@@ -54,10 +54,6 @@ def create_workload(request, workload_type):
     if not Profile.objects.get(user=request.user).enabled:
         return OpenBench.views.redirect(request, '/login/', error='Only enabled users can create tests')
 
-    # The 4pc_arena match runner used by the Client has no datagen support
-    if workload_type == 'DATAGEN':
-        return OpenBench.views.redirect(request, '/index/', error='Datagen is not supported for 4PC engines')
-
     if request.method == 'GET':
 
         engines = EngineConfig.objects.filter(enabled=True).order_by('name')

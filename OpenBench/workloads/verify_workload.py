@@ -198,6 +198,11 @@ def verify_datagen_creation(errors, request):
         (verify_datagen_book   , 'book_name', 'Book'),
         (verify_upload_pgns    , 'upload_pgns', 'Upload PGNs'),
 
+        # 4PC Workers run the engine's own generate_training_data, see Client/datagen.py
+        (verify_datagen_limit  , 'dev_time_control', 'Dev Time Control'),
+        (verify_datagen_limit  , 'base_time_control', 'Base Time Control'),
+        (verify_datagen_4pc    , 'datagen_play_reverses', 'upload_pgns'),
+
         # Verify everything about the General Settings
         (verify_integer        , 'priority', 'Priority'),
         (verify_greater_than   , 'throughput', 'Throughput', 0),
@@ -380,6 +385,24 @@ def verify_datagen_book(errors, request, field, field_name):
         if request.POST[field] == 'NONE': return
         assert Book.objects.filter(name=request.POST[field], enabled=True).exists()
     except: errors.append('{0} was neither NONE nor found in the configuration'.format(field_name))
+
+def verify_datagen_limit(errors, request, field, field_name):
+
+    # generate_training_data searches a fixed number of nodes, or to a fixed depth
+    try: time_control = OpenBench.utils.TimeControl.parse(request.POST[field])
+    except: return # Already reported by verify_time_control()
+
+    fixed = [OpenBench.utils.TimeControl.FIXED_NODES, OpenBench.utils.TimeControl.FIXED_DEPTH]
+    if OpenBench.utils.TimeControl.control_type(time_control) not in fixed:
+        errors.append('{0} must be N=<nodes> or D=<depth> for 4PC Data Generation'.format(field_name))
+
+def verify_datagen_4pc(errors, request, reverses_field, pgns_field):
+
+    # Every game starts from its own random opening, and the data stays on the Workers
+    if request.POST.get(reverses_field) == 'YES':
+        errors.append('Play Reverses must be NO for 4PC Data Generation')
+    if request.POST.get(pgns_field, 'FALSE') != 'FALSE':
+        errors.append('Upload PGNs must be FALSE for 4PC Data Generation, as the data stays on the Workers')
 
 def verify_scale_method(errors, request, field):
     try: assert(request.POST[field] in Test.ScaleMethod)
