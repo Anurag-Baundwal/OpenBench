@@ -6,7 +6,8 @@ A fork of [OpenBench](https://github.com/AndyGrant/OpenBench) for testing four-p
 
 - The **server** is a Django website. It stores tests, assigns work, and computes the SPRT. It needs no CPU power, so a small host such as PythonAnywhere is enough.
 - Each **worker** runs `Client/client.py`. For every workload it downloads both engine commits from GitHub and builds them with `make`. It checks each build's `bench`, then plays games with `match.py`, the 4pc_arena match runner, which ships with the Client.
-- Openings come from `Books/fens.txt`, 10,000 balanced 4PC FENs, which the server hosts itself. Every pair of games shares an opening, with the engines swapping teams, and every workload uses new openings.
+- Openings come from `Books/fens_100k.txt`, 100,000 balanced 4PC FENs, which the server hosts itself. Every pair of games shares an opening, with the engines swapping teams, and every workload uses new openings.
+- `Scripts/generate_fens.py` made the book: 8 plies from the start position, each picked among the moves within 100 cp of the best, kept only if both the NNUE and the hand crafted evaluation builds of stockfish_4pc find the result within 100 cp. The older `Books/fens.txt`, 10,000 positions from 4 random plies, stays for the tests that were created with it.
 - Results are pentanomial pairs, and the SPRT uses normalized Elo, the same model as `match.py --sprt`.
 
 ## Running the server
@@ -79,7 +80,7 @@ To stop a worker cleanly, create a file named `openbench.exit` in `Client/`.
 ## Differences from upstream OpenBench
 
 - `match.py` replaces fastchess, so there is nothing to download or build for the match runner.
-- The standard chess books are disabled in favor of `fens.txt`.
+- The standard chess books are disabled in favor of `fens_100k.txt` and `fens.txt`.
 - Datagen runs the engine's own `generate_training_data`, rather than genfens openings and games, and the data stays on the workers rather than being uploaded as PGNs.
 - Syzygy and win/draw adjudication are not supported. `match.py` itself draws games by threefold repetition, the fifty-move rule (200 plies) and its 1000-ply limit. Checkmate, stalemate and king captures are taken from the engines, which report when they have no legal move.
 

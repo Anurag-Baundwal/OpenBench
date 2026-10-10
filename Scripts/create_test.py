@@ -33,7 +33,7 @@ data = {
     'test_confidence'  : 'N/A',
     'test_max_games'   : '',
 
-    'book_name'        : 'fens.txt',
+    'book_name'        : 'fens_100k.txt',
     'upload_pgns'      : 'FALSE',
     'throughput'       : '1000',
     'workload_size'    : '32',

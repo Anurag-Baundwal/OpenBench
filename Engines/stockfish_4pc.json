@@ -17,7 +17,7 @@
             "both_time_control" : "10.0+0.1",
             "test_bounds"       : "[0.00, 3.00]",
             "test_confidence"   : "[0.05, 0.05]",
-            "book_name"         : "fens.txt",
+            "book_name"         : "fens_100k.txt",
             "workload_size"     : "4"
         }
     },
@@ -26,7 +26,7 @@
         "default" : {
             "both_options"      : "Threads=1 Hash=128",
             "both_time_control" : "10.0+0.1",
-            "book_name"         : "fens.txt"
+            "book_name"         : "fens_100k.txt"
         }
     },
 
@@ -35,7 +35,7 @@
             "both_branch"            : "tools/datagen-nnuedat2",
             "both_options"           : "Threads=1 Hash=16",
             "both_time_control"      : "N=5000",
-            "book_name"              : "fens.txt",
+            "book_name"              : "fens_100k.txt",
             "upload_pgns"            : "FALSE",
             "workload_size"          : "128",
             "datagen_max_games"      : "100000",
