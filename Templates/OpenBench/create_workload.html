@@ -228,7 +228,9 @@
                     <label for="upload_pgns"> Upload PGNs </label>
                     <select id="upload_pgns" name="upload_pgns">
                         {% if workload == "DATAGEN" %}
-                            <option selected value="COMPACT"> Compact </option>
+                            <!-- 4PC Datagen keeps the data on the Workers, and only False is accepted -->
+                            <option selected value="FALSE"> False </option>
+                            <option value="COMPACT"> Compact </option>
                             <option value="VERBOSE"> Verbose </option>
                         {% else %}
                             <option selected value="FALSE"> False </option>
