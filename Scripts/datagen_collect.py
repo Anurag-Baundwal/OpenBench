@@ -126,6 +126,18 @@ def main():
     train.mkdir(parents=True, exist_ok=True)
     validation.mkdir(parents=True, exist_ok=True)
 
+    # A rerun replaces the files of the previous one, which would otherwise be
+    # left behind, some of them in both splits
+    folders = (train.resolve(), validation.resolve())
+    if any(Path(path).resolve().parent in folders for path in inputs):
+        sys.exit('Some inputs are in %s; choose another --out' % (args.out))
+
+    previous = [path for folder in (train, validation) for path in folder.glob('*.bin')]
+    for path in previous:
+        path.unlink()
+    if previous:
+        print('Removed %d files of a previous run from %s' % (len(previous), args.out))
+
     # The trainer rejects files without positions, so they are left out
     inputs = [path for path in inputs if len(read_file(path)) > HEADER.size]
 
