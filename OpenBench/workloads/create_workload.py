@@ -131,7 +131,7 @@ def create_new_test(request):
     test.author            = request.user.username
     test.book_name         = request.POST['book_name']
     test.upload_pgns       = request.POST['upload_pgns']
-    test.info              = dev_info[4]
+    test.info              = request.POST['info']
 
     test.dev               = Engine.objects.create(name=dev_info[1], source=dev_info[0], sha=dev_info[2], bench=dev_info[3])
     test.dev_repo          = request.POST['dev_repo']
