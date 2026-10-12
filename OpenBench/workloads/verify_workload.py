@@ -316,9 +316,13 @@ def verify_sprt_conf(errors, request, field):
 
 def verify_max_games(errors, request, field):
     try:
-        if request.POST['test_mode'] != 'GAMES': return
-        assert int(request.POST['test_max_games']) > 0
-    except: errors.append('Fixed Games Tests must last at least one game')
+        if request.POST['test_mode'] == 'SPRT':
+            value = request.POST['test_max_games'].strip()
+            if value in ('', 'N/A'): return
+            assert int(value) > 0
+        elif request.POST['test_mode'] == 'GAMES':
+            assert int(request.POST['test_max_games']) > 0
+    except: errors.append('Max Games must be a positive integer (blank or N/A for uncapped SPRTs)')
 
 def verify_syzygy_field(errors, request, field, field_name):
     candidates = ['OPTIONAL', 'DISABLED', '3-MAN', '4-MAN', '5-MAN', '6-MAN', '7-MAN']

@@ -172,6 +172,10 @@ def create_new_test(request):
     if test.test_mode == 'GAMES':
         test.max_games = int(request.POST['test_max_games'])
 
+    # SPRTs may optionally be capped; blank or N/A means uncapped
+    if test.test_mode == 'SPRT' and request.POST['test_max_games'].strip().isdigit():
+        test.max_games = int(request.POST['test_max_games'])
+
     if test.dev_network:
         test.dev_netname = Network.objects.get(engine=test.dev_engine, sha256=test.dev_network).name
 

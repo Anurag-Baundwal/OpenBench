@@ -145,7 +145,7 @@ function set_option(option_name, option_value) {
 
         if (option_name == 'test_bounds' || option_name == 'test_confidence') {
             document.getElementById('test_mode').value = "SPRT";
-            document.getElementById('test_max_games').value = 'N/A';
+            document.getElementById('test_max_games').value = '';
         }
     }
 
@@ -261,7 +261,7 @@ function set_test_type() {
     if (mode == 'SPRT') {
         document.getElementById('test_bounds'    ).value = base.test_bounds || stc.test_bounds;
         document.getElementById('test_confidence').value = base.test_confidence || stc.test_confidence;
-        document.getElementById('test_max_games' ).value = 'N/A';
+        document.getElementById('test_max_games' ).value = '';
     }
 
     if (mode == 'GAMES') {

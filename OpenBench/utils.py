@@ -604,6 +604,10 @@ def update_test(request, machine):
             test.failed   = test.currentllr < test.lowerllr
             test.finished = test.passed or test.failed
 
+            # Stop at the Max Games cap, if one was set, without a verdict
+            if test.max_games > 0 and test.games >= test.max_games:
+                test.finished = True
+
         elif test.test_mode == 'GAMES':
 
             # Finish test once we've played the proper amount of games
