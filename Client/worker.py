@@ -58,7 +58,7 @@ from client import try_forever
 
 ## Basic configuration of the Client. These timeouts can be changed at will
 
-CLIENT_VERSION   = 63 # Client version to send to the Server
+CLIENT_VERSION   = 64 # Client version to send to the Server
 TIMEOUT_HTTP     = 30 # Timeout in seconds for HTTP requests
 TIMEOUT_ERROR    = 60 # Timeout in seconds when any errors are thrown
 TIMEOUT_WORKLOAD = 60 # Timeout in seconds between workload requests
@@ -220,6 +220,10 @@ class Configuration:
 
         # Set the CPU name which has to be done via global
         self.cpu_name = info.get('brand_raw', info.get('brand', 'Unknown'))
+
+        # Name every core type of a big.LITTLE CPU, e.g. "Cortex-A520 + Cortex-A720"
+        if len(names := cpu_core_names()) > 1:
+            self.cpu_name = ' + '.join(names)
 
         # This should cover virtually all compiler flags that we would care about
         desired  = ['POPCNT', 'BMI2']
@@ -853,6 +857,27 @@ def get_version(program):
         except: pass
 
     raise Exception('All attempts to get the version of %s failed' % (program))
+
+def cpu_core_names():
+
+    # lscpu lists one "Model name" per core type, e.g. each cluster of an ARM
+    # big.LITTLE CPU, whereas py-cpuinfo only reports the first one. Returns
+    # the distinct names in lscpu's order, or nothing where lscpu is missing
+    try:
+        env     = dict(os.environ, LC_ALL='C')
+        process = Popen(['lscpu'], stdout=PIPE, stderr=PIPE, env=env)
+        stdout  = process.communicate(timeout=10)[0].decode('utf-8', errors='ignore')
+    except Exception:
+        return []
+
+    names = []
+    for line in stdout.splitlines():
+        if line.strip().startswith('Model name:'):
+            name = line.split(':', 1)[1].strip()
+            if name and name not in names:
+                names.append(name)
+
+    return names
 
 def locate_utility(util, force_exit=True, report_error=True):
 
