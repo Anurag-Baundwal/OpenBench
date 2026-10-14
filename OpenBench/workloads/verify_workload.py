@@ -100,6 +100,7 @@ def verify_test_creation(errors, request):
         (verify_integer        , 'priority', 'Priority'),
         (verify_greater_than   , 'throughput', 'Throughput', 0),
         (verify_syzygy_field   , 'syzygy_wdl', 'Syzygy WDL'),
+        (verify_arch_filter    , 'arch_filter'),
 
         # Verify everything about the Workload Settings
         (verify_integer        , 'workload_size', 'Workload Size'),
@@ -144,6 +145,7 @@ def verify_tune_creation(errors, request):
         (verify_integer               , 'priority', 'Priority'),
         (verify_greater_than          , 'throughput', 'Throughput', 0),
         (verify_syzygy_field          , 'syzygy_wdl', 'Syzygy WDL'),
+        (verify_arch_filter           , 'arch_filter'),
 
         # Verify the Scaling Mechanisms
         (verify_scale_method   , 'scale_method'),
@@ -207,6 +209,7 @@ def verify_datagen_creation(errors, request):
         (verify_integer        , 'priority', 'Priority'),
         (verify_greater_than   , 'throughput', 'Throughput', 0),
         (verify_syzygy_field   , 'syzygy_wdl', 'Syzygy WDL'),
+        (verify_arch_filter    , 'arch_filter'),
 
         # Verify everything about the Workload Settings
         (verify_integer        , 'workload_size', 'Workload Size'),
@@ -413,6 +416,25 @@ def verify_scale_method(errors, request, field):
     except:
         choices = [f[0] for f in Test.ScaleMethod.choices]
         errors.append('Unknown Scale Method. Expected one of {%s}.' % (', '.join(choices)))
+
+def verify_arch_filter(errors, request, field):
+
+    # As in Fishtest: an empty filter is no filter, and any other must be a valid
+    # regex that allows at least one of the ISAs that Machines may report
+    arch_filter = request.POST.get(field, '').strip()
+    if not arch_filter:
+        return
+
+    max_length = Test._meta.get_field('arch_filter').max_length
+    if len(arch_filter) > max_length:
+        return errors.append('Arch Filter must be at most %d characters' % (max_length))
+
+    try: re.compile(arch_filter)
+    except re.error as error:
+        return errors.append('Invalid Arch Filter: %s' % (error))
+
+    if not OpenBench.utils.arch_filter_arches(arch_filter):
+        errors.append('Arch Filter %s has no compatible arches' % (arch_filter))
 
 
 def collect_github_info(errors, request, field):

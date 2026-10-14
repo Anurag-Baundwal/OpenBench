@@ -11,6 +11,7 @@
     {{test.dev_time_control}}
     {% if test|test_is_time_odds %} <span style="color: yellow; cursor: pointer" title="Time odds">*</span> {% endif %}
     {% if test|test_is_smp_odds %} <span style="color: orange; cursor: pointer" title="Thread odds">*</span> {% endif %}
+    {% if test.arch_filter %} <span style="color: yellow; cursor: pointer" title="Arch filter: {{test|arch_filter_text}}">A</span> {% endif %}
 </td>
 <td class='statblock statblock-{{test|testResultColour}}'><strong>{{test|shortStatBlock|linebreaksbr}}</strong></td>
 <td class="test-info"><div>{{test.info}}</div></td>

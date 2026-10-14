@@ -132,6 +132,59 @@ def workload_uses_time_based_tc(workload):
        or (dev_type  != TimeControl.FIXED_NODES and dev_type  != TimeControl.FIXED_DEPTH) \
        or (base_type != TimeControl.FIXED_NODES and base_type != TimeControl.FIXED_DEPTH)
 
+# The ISA names a Machine may report, as Client/isa_detector.py names them. The
+# list is Fishtest's, which follows Stockfish, so that an Arch Filter is checked
+# the same way: it must match at least one of these to be accepted.
+SUPPORTED_ARCHES = [
+    'apple-silicon',
+    'armv7',
+    'armv7-neon',
+    'armv8',
+    'armv8-dotprod',
+    'e2k',
+    'general-32',
+    'general-64',
+    'loongarch64',
+    'loongarch64-lasx',
+    'loongarch64-lsx',
+    'ppc-32',
+    'ppc-64',
+    'ppc-64-altivec',
+    'ppc-64-vsx',
+    'riscv64',
+    'x86-32',
+    'x86-32-sse2',
+    'x86-32-sse41-popcnt',
+    'x86-64',
+    'x86-64-avx2',
+    'x86-64-avx512',
+    'x86-64-avxvnni',
+    'x86-64-bmi2',
+    'x86-64-sse3-popcnt',
+    'x86-64-sse41-popcnt',
+    'x86-64-ssse3',
+    'x86-64-vnni512',
+    'x86-64-avx512icl',
+]
+
+def arch_filter_matches(arch_filter, isa_name):
+
+    # As in Fishtest, the filter is a regex searched for in the ISA name, and an
+    # empty filter allows every Machine. Filters are verified when a Workload is
+    # created, so a broken one should never get here; if it does, nothing matches
+    if not arch_filter:
+        return True
+
+    try:
+        return re.search(arch_filter, isa_name or '') is not None
+    except re.error:
+        return False
+
+def arch_filter_arches(arch_filter):
+
+    # The supported ISAs that an Arch Filter allows, for verification and display
+    return [arch for arch in SUPPORTED_ARCHES if arch_filter_matches(arch_filter, arch)]
+
 def path_join(*args):
     return "/".join([f.lstrip("/").rstrip("/") for f in args]).rstrip('/')
 

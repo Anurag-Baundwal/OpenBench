@@ -56,6 +56,10 @@
             <tr><td class="td-label">Upload PGNs</td><td>{{workload.upload_pgns}}</td></tr>
             <tr><td class="td-label">Scaling</td><td>{{workload.scale_method}} {{workload.scale_nps}} NPS</td></tr>
 
+            {% if workload.arch_filter %}
+                <tr><td class="td-label">Arch Filter</td><td>{{workload|arch_filter_text}}</td></tr>
+            {% endif %}
+
             {% if type == "TUNE" %}
                 <tr><td class="td-label">Alpha</td><td>{{workload.spsa_run.alpha}}</td></tr>
                 <tr><td class="td-label">Gamma</td><td>{{workload.spsa_run.gamma}}</td></tr>

@@ -355,6 +355,11 @@ def test_is_time_odds(test):
 def test_is_fischer(test):
     return 'FRC' in test.book_name.upper() or '960' in test.book_name.upper()
 
+def arch_filter_text(test):
+    # As Fishtest shows it: the filter, then the supported ISAs that it allows
+    arches = OpenBench.utils.arch_filter_arches(test.arch_filter)
+    return '%s  (%s)' % (test.arch_filter, ', '.join(arches))
+
 register.filter('book_download_link', book_download_link)
 register.filter('network_download_link', network_download_link)
 
@@ -366,6 +371,7 @@ register.filter('git_diff_text', git_diff_text)
 register.filter('test_is_smp_odds'  , test_is_smp_odds  )
 register.filter('test_is_time_odds' , test_is_time_odds )
 register.filter('test_is_fischer'   , test_is_fischer   )
+register.filter('arch_filter_text'  , arch_filter_text  )
 
 
 @register.filter

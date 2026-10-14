@@ -222,6 +222,9 @@ class Test(Model):
     scale_method  = CharField(max_length=16, choices=ScaleMethod.choices, default=ScaleMethod.BASE)
     scale_nps     = IntegerField(default=0)
 
+    # Regex on the Machine's ISA, as in Fishtest. Empty allows every Machine
+    arch_filter   = CharField(max_length=128, default='', blank=True)
+
     # Tablebases and Match runner adjudicatoins
     syzygy_wdl  = CharField(max_length=16, default='OPTIONAL')
     syzygy_adj  = CharField(max_length=16, default='OPTIONAL')

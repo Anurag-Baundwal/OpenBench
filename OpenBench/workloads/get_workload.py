@@ -120,6 +120,10 @@ def filter_valid_workloads(request, machine):
     if machine.info.get('noisy'):
         workloads = [x for x in workloads if not OpenBench.utils.workload_uses_time_based_tc(x)]
 
+    # Skip workloads whose Arch Filter does not allow this Machine's ISA
+    isa_name  = machine.info.get('isa_name', '')
+    workloads = [x for x in workloads if OpenBench.utils.arch_filter_matches(x.arch_filter, isa_name)]
+
     # Skip workloads that we have insufficient threads to play
     options = [x for x in workloads if valid_hardware_assignment(x, machine)]
 
