@@ -22,6 +22,7 @@ import argparse
 import hashlib
 import os
 import platform
+import re
 import requests
 import shutil
 import subprocess
@@ -157,7 +158,8 @@ def engine_binary_name(engine, commit_sha, net_path):
     name = '%s-%s' % (engine, commit_sha.upper()[:8])
     if net_path:
         name += '-%s' % (net_path[-8:])
-    return name
+    # Binaries cached by older Clients were built without profile-build
+    return name + '-pgo'
 
 def check_for_engine_binary(out_path):
 
@@ -177,11 +179,27 @@ def check_for_engine_binary(out_path):
         os.rename(out_path, '%s.exe' % (out_path))
         return '%s.exe' % (out_path)
 
+def has_profile_build_target(make_path):
+
+    # GNU make reads the first of these files that exists
+    for name in ('GNUmakefile', 'makefile', 'Makefile'):
+        path = os.path.join(make_path, name)
+        if os.path.isfile(path):
+            with open(path, errors='replace') as fin:
+                return any(re.match(r'profile-build\s*:', line) for line in fin)
+
+    return False
+
 def makefile_command(net_path, make_path, out_path, compiler, jobs=None):
 
     # Build with a bounded -j, as an unbounded one starts every compile at once,
     # which can exhaust the memory of small machines. EXE= controls the output location
     command = ['make', '-j%d' % (jobs or os.cpu_count() or 1), 'EXE=%s' % (out_path)]
+
+    # Build with profile-guided optimization when the Makefile can, as Fishtest
+    # builds Stockfish with `make profile-build`. A failed PGO build is an error
+    if has_profile_build_target(make_path):
+        command += ['profile-build']
 
     # Build with CC/CXX= when using a custom compiler
     if compiler and not any(rc in compiler for rc in ('rustc','cargo')):
