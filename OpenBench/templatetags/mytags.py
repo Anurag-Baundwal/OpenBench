@@ -100,10 +100,12 @@ def longStatBlock(test):
     timecontrol = test.dev_time_control + ['s', '']['=' in test.dev_time_control]
     type_text   = 'SPRT' if test.test_mode == 'SPRT' else 'Conf'
 
-    lower, elo, upper = OpenBench.stats.Elo(test.results())
+    lower, elo, upper   = OpenBench.stats.Elo(test.results())
+    nelo, nelo_error, _ = fastchessStats(test.results())
 
     lines = [
         'Elo   | %0.2f +- %0.2f (95%%)' % (elo, max(upper - elo, elo - lower)),
+        'nElo  | %0.2f +- %0.2f (95%%)' % (nelo, nelo_error),
         '%-5s | %s Threads=%d Hash=%dMB' % (type_text, timecontrol, threads, hashmb),
     ]
 
@@ -117,6 +119,32 @@ def longStatBlock(test):
         lines.append('Penta | [%d, %d, %d, %d, %d]' % test.as_penta())
 
     return '\n'.join(lines)
+
+def fastchessStats(results):
+
+    # nElo, its 95% error, and LOS, as Fastchess computes them. Shared by the
+    # Test's page and the results Workers print, so that the two always agree
+
+    penta = len(results) == 5
+
+    # Mean score and its variance, per game pair for Pentanomial, scaled to [0, 1]
+    N   = sum(results)
+    div = len(results) - 1
+    mu  = sum(i / div * x for i, x in enumerate(results)) / N if N else 0.5
+    var = sum((i / div - mu) ** 2 * x for i, x in enumerate(results)) / N if N else 0.0
+
+    # A pair's variance is doubled for nElo
+    if var > 0:
+        scale      = (800 / math.log(10)) / math.sqrt((2 if penta else 1) * var)
+        nelo       = (mu - 0.5) * scale
+        nelo_error = 1.959963984540054 * math.sqrt(var / N) * scale
+        los        = 0.5 * (1 + math.erf((mu - 0.5) / math.sqrt(2 * var / N)))
+
+    else: # Every result so far is identical, as when only one has been played
+        nelo, nelo_error = 0.0, 0.0
+        los = 1.0 if mu > 0.5 else 0.0 if mu < 0.5 else 0.5
+
+    return nelo, nelo_error, los
 
 def workerStatBlock(test):
 
@@ -134,25 +162,9 @@ def workerStatBlock(test):
     penta   = len(results) == 5
     games, wins, losses, draws = test.as_nwld()
 
-    # Elo is computed as on the Test's page, so that the two always agree
-    lower, elo, upper = OpenBench.stats.Elo(results)
-
-    # Mean score and its variance, per game pair for Pentanomial, scaled to [0, 1]
-    N   = sum(results)
-    div = len(results) - 1
-    mu  = sum(i / div * x for i, x in enumerate(results)) / N if N else 0.5
-    var = sum((i / div - mu) ** 2 * x for i, x in enumerate(results)) / N if N else 0.0
-
-    # nElo and LOS as Fastchess computes them. A pair's variance is doubled for nElo
-    if var > 0:
-        scale      = (800 / math.log(10)) / math.sqrt((2 if penta else 1) * var)
-        nelo       = (mu - 0.5) * scale
-        nelo_error = 1.959963984540054 * math.sqrt(var / N) * scale
-        los        = 0.5 * (1 + math.erf((mu - 0.5) / math.sqrt(2 * var / N)))
-
-    else: # Every result so far is identical, as when only one has been played
-        nelo, nelo_error = 0.0, 0.0
-        los = 1.0 if mu > 0.5 else 0.0 if mu < 0.5 else 0.5
+    # Elo and nElo are computed as on the Test's page, so that the two always agree
+    lower, elo, upper     = OpenBench.stats.Elo(results)
+    nelo, nelo_error, los = fastchessStats(results)
 
     # Fastchess shows "inf" or "nan" when nothing is being divided by
     def ratio(a, b):
@@ -163,7 +175,7 @@ def workerStatBlock(test):
     if penta:
         LL, LD, DD, DW, WW = results
         los_line = 'LOS: %.2f %%, DrawRatio: %.2f %%, PairsRatio: %.2f' % (
-            100 * los, 100 * ratio(DD, N), ratio(WW + DW, LL + LD))
+            100 * los, 100 * ratio(DD, sum(results)), ratio(WW + DW, LL + LD))
 
     else: # Fastchess counts drawn games when not reporting game pairs
         los_line = 'LOS: %.2f %%, DrawRatio: %.2f %%' % (100 * los, 100 * ratio(draws, games))
