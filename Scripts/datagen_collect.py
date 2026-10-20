@@ -28,6 +28,7 @@
 # than one file, with the same pieces and side to move, is only kept once. The
 # engine already skips repeated positions within a Workload, so this only finds
 # those repeated between Workloads, and no position is in both of the splits.
+# The files are handled on all cores at once.
 #
 #   python Scripts/datagen_collect.py Datagen/ --out data --validation 1000000
 #
@@ -38,6 +39,7 @@ import lzma
 import struct
 import sys
 
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -94,6 +96,29 @@ def game_ids(raw):
     records = np.frombuffer(raw, dtype=np.uint8, offset=HEADER.size).reshape(-1, RECORD_SIZE)
     return records[:, GAME_OFFSET:GAME_OFFSET + 8].copy().view('<u8').ravel()
 
+def unpack(path, output):
+
+    # Unpacks one file, and returns the keys of its positions and its game ids.
+    # The trainer rejects files without positions, so they are left out
+    raw = read_file(path)
+    if len(raw) == HEADER.size:
+        return None
+
+    output.write_bytes(raw)
+    return position_keys(raw), np.unique(game_ids(raw))
+
+def rewrite(output, mask):
+
+    # Writes a file again with only the positions it keeps, or deletes it if none are left
+    raw     = output.read_bytes()
+    records = np.frombuffer(raw, dtype=np.uint8, offset=HEADER.size).reshape(-1, RECORD_SIZE)[mask]
+    if not len(records):
+        output.unlink()
+        return
+
+    data = records.tobytes()
+    output.write_bytes(HEADER.pack(BIN_MAGIC, len(records), BIN_SCHEMA, fnv1a(data)) + data)
+
 def find_inputs(paths):
 
     files = []
@@ -138,60 +163,63 @@ def main():
     if previous:
         print('Removed %d files of a previous run from %s' % (len(previous), args.out))
 
-    # The trainer rejects files without positions, so they are left out
-    inputs = [path for path in inputs if len(read_file(path)) > HEADER.size]
+    # Each file is unpacked, and later rewritten, by its own process
+    with ProcessPoolExecutor() as pool:
 
-    # First pass: unpack every file, and hash its positions
-    outputs, keys, games = [], [], []
-    for index, path in enumerate(inputs):
-        raw    = read_file(path)
-        output = train / path.name.removesuffix('.xz')
-        output.write_bytes(raw)
-        outputs.append(output)
-        keys.append(position_keys(raw))
-        games.append(np.unique(game_ids(raw)))
-        print('[%d/%d] %s: %d positions' % (index + 1, len(inputs), path, len(keys[-1])), flush=True)
+        # First pass: unpack every file, and hash its positions
+        outputs, keys, games = [], [], []
+        names = [train / path.name.removesuffix('.xz') for path in inputs]
+        for index, (path, output, result) in enumerate(zip(inputs, names, pool.map(unpack, inputs, names))):
+            print('[%d/%d] %s: %d positions' % (index + 1, len(inputs), path, len(result[0]) if result else 0), flush=True)
+            if result:
+                outputs.append(output)
+                keys.append(result[0])
+                games.append(result[1])
 
-    # Keep the first of every position, so files are only rewritten when they lose one
-    every    = np.concatenate(keys)
-    starts   = np.cumsum([0] + [len(k) for k in keys])
-    _, first = np.unique(every, return_index=True)
-    keep     = np.zeros(len(every), dtype=bool)
-    keep[first] = True
-    masks    = [keep[starts[i]:starts[i + 1]] for i in range(len(inputs))]
+        if not outputs:
+            sys.exit('The files hold no positions')
 
-    # Whole files from the end go to validation, until it holds enough positions
-    total = 0
-    for index in reversed(range(len(inputs))):
-        if total >= args.validation:
-            break
-        if masks[index].any():
-            outputs[index] = outputs[index].replace(validation / outputs[index].name)
-            total += int(masks[index].sum())
+        # Keep the first of every position, so files are only rewritten when they lose one.
+        # Few positions are repeated, so a sort finds them, and only they are looked up
+        ordered = np.concatenate(keys)
+        ordered.sort()
+        repeats = np.unique(ordered[1:][ordered[1:] == ordered[:-1]])
+        del ordered
 
-    # Second pass: rewrite the files that lost positions, and drop any left empty
-    for output, mask in zip(outputs, masks):
-        if mask.all():
-            continue
+        masks, seen = [], set()
+        for k in keys:
+            mask = np.ones(len(k), dtype=bool)
+            if len(repeats):
+                found = repeats[np.searchsorted(repeats, k).clip(max=len(repeats) - 1)]
+                hits  = np.flatnonzero(found == k)
+                for index, key in zip(hits, k[hits].tolist()):
+                    mask[index] = key not in seen
+                    seen.add(key)
+            masks.append(mask)
 
-        raw     = output.read_bytes()
-        records = np.frombuffer(raw, dtype=np.uint8, offset=HEADER.size).reshape(-1, RECORD_SIZE)[mask]
-        if not len(records):
-            output.unlink()
-            continue
+        # Whole files from the end go to validation, until it holds enough positions
+        total = 0
+        for index in reversed(range(len(outputs))):
+            if total >= args.validation:
+                break
+            if masks[index].any():
+                outputs[index] = outputs[index].replace(validation / outputs[index].name)
+                total += int(masks[index].sum())
 
-        data = records.tobytes()
-        output.write_bytes(HEADER.pack(BIN_MAGIC, len(records), BIN_SCHEMA, fnv1a(data)) + data)
+        # Second pass: rewrite the files that lost positions, and drop any left empty
+        lost = [index for index, mask in enumerate(masks) if not mask.all()]
+        list(pool.map(rewrite, [outputs[i] for i in lost], [masks[i] for i in lost]))
 
-    totals = { name : sum(int(m.sum()) for o, m in zip(outputs, masks) if o.parent == folder)
-               for name, folder in (('train', train), ('validation', validation)) }
+    positions = sum(len(k) for k in keys)
+    totals    = { name : sum(int(m.sum()) for o, m in zip(outputs, masks) if o.parent == folder)
+                  for name, folder in (('train', train), ('validation', validation)) }
 
     # Different Workloads have different seeds, so a game id in two files means repeated data
     all_games = np.concatenate(games)
     repeated  = len(all_games) - len(np.unique(all_games))
 
-    print('\nFiles      : %d' % (len(inputs)))
-    print('Positions  : %d, of which %d were repeats' % (len(every), len(every) - len(first)))
+    print('\nFiles      : %d' % (len(outputs)))
+    print('Positions  : %d, of which %d were repeats' % (positions, positions - sum(int(m.sum()) for m in masks)))
     print('Train      : %d positions in %s' % (totals['train'], Path(args.out) / 'train'))
     print('Validation : %d positions in %s' % (totals['validation'], Path(args.out) / 'validation'))
     print('Games      : %d, with %d game ids in more than one file' % (len(all_games), repeated))
