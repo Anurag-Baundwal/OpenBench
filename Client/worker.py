@@ -58,10 +58,11 @@ from client import try_forever
 
 ## Basic configuration of the Client. These timeouts can be changed at will
 
-CLIENT_VERSION   = 65 # Client version to send to the Server
+CLIENT_VERSION   = 66 # Client version to send to the Server
 TIMEOUT_HTTP     = 30 # Timeout in seconds for HTTP requests
 TIMEOUT_ERROR    = 60 # Timeout in seconds when any errors are thrown
 TIMEOUT_WORKLOAD = 60 # Timeout in seconds between workload requests
+BLACKLIST_TIME   = 3 * 60 * 60 # Seconds before a blacklisted Workload is retried
 REPORT_INTERVAL  = 30 # Seconds between reports to the Server
 RATING_INTERVAL  = 10 # Game pairs between printing the Test's results, as in Fastchess
 
@@ -94,7 +95,7 @@ class Configuration:
         self.machine_id     = 'None'
         self.secret_token   = 'None'
         self.syzygy_max     = 0 # 4PC has no tablebases, but the Server expects a value
-        self.blacklist      = []
+        self.blacklist      = {} # Workload id -> time it was blacklisted
 
         self.process_args(args)   # Rest of the command line settings
         self.check_requirements() # Checks for Make, g++ or clang++, and match.py
@@ -1108,7 +1109,10 @@ def server_request_workload(config):
 
     print('\nRequesting Workload from Server...')
 
-    payload  = { 'machine_id' : config.machine_id, 'secret' : config.secret_token, 'blacklist' : config.blacklist }
+    # Forget blacklisted Workloads after a while, since a Test may have been fixed
+    config.blacklist = { id : t for id, t in config.blacklist.items() if time.time() - t < BLACKLIST_TIME }
+
+    payload  = { 'machine_id' : config.machine_id, 'secret' : config.secret_token, 'blacklist' : list(config.blacklist) }
     target   = utils.url_join(config.server, 'clientGetWorkload')
     response = requests.post(target, data=payload, timeout=TIMEOUT_HTTP)
 
@@ -1216,7 +1220,7 @@ def complete_workload(config):
         # A match runner exiting with an error, rather than finishing its games, is
         # usually an engine crashing. Report it, and stop taking this Workload
         if (failures := [task.exception() for task in tasks if task.exception()]):
-            config.blacklist.append(config.workload['test']['id'])
+            config.blacklist[config.workload['test']['id']] = time.time()
             for failure in failures:
                 ServerReporter.report_engine_error(config, failure.message, failure.logs)
             raise failures[0]
@@ -1281,7 +1285,7 @@ def complete_datagen_workload(config):
 
     # Report the failure, and stop taking this Workload
     if failure:
-        config.blacklist.append(config.workload['test']['id'])
+        config.blacklist[config.workload['test']['id']] = time.time()
         ServerReporter.report_engine_error(config, failure.message, failure.logs)
         raise failure
 
@@ -1332,7 +1336,7 @@ def safe_download_engine(config, branch, net_path):
             print ('> %s' % (line))
         print ()
 
-        config.blacklist.append(config.workload['test']['id'])
+        config.blacklist[config.workload['test']['id']] = time.time()
         ServerReporter.report_build_fail(config, branch, error.logs)
         raise
 
