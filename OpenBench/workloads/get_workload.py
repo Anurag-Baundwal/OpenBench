@@ -63,10 +63,20 @@ def select_workload(request, machine):
     # Step 2: Count relevant threads on each candidate test
     worker_dist, engine_freq = compute_resource_distribution(candidates, machine, has_focus)
 
+    # The candidates are already in memory, so the winner never needs a re-fetch
+    by_id = { workload.id : workload for workload in candidates }
+
     # Step 3: Determine the effective-throughput for each workload
     if OPENBENCH_CONFIG['balance_engine_throughputs']:
         for id, data in worker_dist.items():
             data['throughput'] = data['throughput'] / engine_freq[data['engine']]
+
+    # Step 3b: Favour SPRTs by their LLR. Fishtest's bonus above zero, up to 1.67x at
+    # LLR 2.0, and a malus below zero, down to 0.5x from LLR -1.0. The floor lets
+    # failing tests still reach their lower bound
+    for id, data in worker_dist.items():
+        if by_id[id].test_mode == 'SPRT':
+            data['throughput'] *= llr_multiplier(by_id[id].currentllr)
 
     # With random_workload_assignment, skip the balancing of threads. Each Workload
     # goes to a random test. Machines differ greatly in speed, so equal threads do
@@ -75,7 +85,6 @@ def select_workload(request, machine):
     # length of its Workloads, so that the time, not the count of Workloads, follows
     # the throughput when the tests have different time controls or Workload sizes
     if OPENBENCH_CONFIG['random_workload_assignment']:
-        by_id   = { workload.id : workload for workload in candidates }
         choices = list(worker_dist.keys())
         weights = [data['throughput'] / workload_length(by_id[id]) for id, data in worker_dist.items()]
         return by_id[random.choices(choices, weights=weights)[0]]
@@ -90,9 +99,6 @@ def select_workload(request, machine):
     throughput_sum = sum(x['throughput'] for x in worker_dist.values())
     fair_ratio     = thread_sum / throughput_sum
 
-    # The candidates are already in memory, so the winner never needs a re-fetch
-    by_id = { workload.id : workload for workload in candidates }
-
     # Step 6: Repeat the same machine, if we are still within +- 25% fairness
     if machine.workload in worker_dist.keys():
         this_ratio = worker_dist[machine.workload]['ratio']
@@ -103,6 +109,13 @@ def select_workload(request, machine):
     choices = [id for id, data in worker_dist.items() if data['ratio'] == min_ratio]
     weights = [data['throughput'] for id, data in worker_dist.items() if data['ratio'] == min_ratio]
     return by_id[random.choices(choices, weights=weights)[0]]
+
+def llr_multiplier(llr):
+
+    # Continuous in the LLR, so a test's share never jumps from one result to the next
+    if llr >= 0:
+        return (min(llr, 2.0) + 3) / 3
+    return max(0.5, 1 + llr / 2)
 
 def workload_length(workload):
 
