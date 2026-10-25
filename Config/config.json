@@ -7,6 +7,7 @@
     "require_login_to_view"       : false,
     "require_manual_registration" : false,
     "balance_engine_throughputs"  : false,
+    "random_workload_assignment"  : true,
 
     "use_x_accel_redirect"  : false,
     "x_accel_redirect_root" : "/x-accel-media/"

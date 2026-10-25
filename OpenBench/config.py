@@ -82,6 +82,7 @@ def verify_general_config(conf):
     assert type(conf.get('require_login_to_view'      ) == bool)
     assert type(conf.get('require_manual_registration') == bool)
     assert type(conf.get('balance_engine_throughputs' ) == bool)
+    assert type(conf.get('random_workload_assignment' )) == bool
 
     # Serving of Networks and PGNs may be handed off to an nginx reverse proxy.
     # The root must match an "internal" nginx location, aliased to Media/. ie:

@@ -68,6 +68,16 @@ def select_workload(request, machine):
         for id, data in worker_dist.items():
             data['throughput'] = data['throughput'] / engine_freq[data['engine']]
 
+    # With random_workload_assignment, skip the balancing of threads. Each Workload
+    # goes to a random test, weighted by throughput. Machines differ greatly in speed,
+    # so equal threads do not mean equal progress; random picks give every test the
+    # same share of every Machine's time, whatever its speed
+    if OPENBENCH_CONFIG['random_workload_assignment']:
+        by_id   = { workload.id : workload for workload in candidates }
+        choices = list(worker_dist.keys())
+        weights = [data['throughput'] for data in worker_dist.values()]
+        return by_id[random.choices(choices, weights=weights)[0]]
+
     # Step 4: Compute the Resource Ratios for each of the workloads, if we were assigned
     for id, data in worker_dist.items():
         data['ratio'] = (data['threads'] + machine.info['concurrency']) / data['throughput']
