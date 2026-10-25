@@ -1,0 +1,107 @@
+================================================================================
+                  UPLOADING DATAGEN DATA TO HUGGING FACE
+================================================================================
+
+Dataset: https://huggingface.co/datasets/4pc-engine/stockfish-4pc-nnue-training-data
+
+All uploads go through Scripts\upload_datagen.py. It asks the dataset which
+files it already has and uploads only the .bin.xz files that are missing, in
+one commit, flat in the dataset root. Running it twice does no harm: the second
+run finds nothing new. Plain .bin files are always left out.
+
+The examples are for test 11; for another test, replace every 11.
+
+To upload to another dataset, add --dataset with its name. A name alone means
+a dataset of the 4pc-engine org; its full address or owner/name also work:
+
+    python Scripts\upload_datagen.py 12 --dataset <new dataset>
+
+New datasets go in the 4pc-engine org (https://huggingface.co/datasets/4pc-engine),
+not under a personal account. Create it on huggingface.co first (New >
+Dataset, owner 4pc-engine, public: free public storage is "best effort",
+while private storage is capped at 100 GB).
+
+
+1. THIS LAPTOP
+--------------------------------------------------------------------------------
+    cd C:\Users\dell3\source\repos7\openbench
+    python Scripts\upload_datagen.py 11
+
+A test id reads the files from Client\Datagen\11.
+
+
+2. PHONE OR TABLET: COPY THE FILES OUT OF TERMUX
+--------------------------------------------------------------------------------
+Termux hides its files from other apps, so first copy them into the device's
+Download folder. In Termux:
+
+    cd ~/OpenBench/Client/Datagen/11 && rm -rf ~/storage/downloads/datagen-11 && mkdir ~/storage/downloads/datagen-11 && cp *.bin.xz ~/storage/downloads/datagen-11/
+
+This clears the old copy first, so a half-copied file from an earlier run
+can't stay behind. If cp says "No such file or directory" about
+~/storage/downloads, run termux-setup-storage once and allow the permission.
+
+
+3. COPY THE FOLDER TO THE LAPTOP
+--------------------------------------------------------------------------------
+Connect the device by USB and choose "File transfer" on it. In Explorer, copy
+Internal storage\Download\datagen-11 to
+
+    C:\Users\dell3\Downloads\datagen-11-tablet     (or datagen-11-phone)
+
+Delete the old copy on the laptop first, if there is one.
+
+Or, with USB debugging on, use adb (the laptop folder must not exist yet):
+
+    adb -s 60314bf6 pull /sdcard/Download/datagen-11 C:\Users\dell3\Downloads\datagen-11-tablet
+    adb -s DA9HEEPBPV7LMRVG pull /sdcard/Download/datagen-11 C:\Users\dell3\Downloads\datagen-11-phone
+
+
+4. UPLOAD FROM THE LAPTOP
+--------------------------------------------------------------------------------
+Give the script the folder instead of a test id:
+
+    cd C:\Users\dell3\source\repos7\openbench
+    python Scripts\upload_datagen.py C:\Users\dell3\Downloads\datagen-11-tablet
+
+It prints how many files are new, lists them, uploads them, and then prints
+the commit's link. "0 new" means the dataset already has them all.
+
+
+5. CLEANING UP
+--------------------------------------------------------------------------------
+Once the upload is done, delete the copies: the folder in the laptop's
+Downloads, and on the device, in Termux:
+
+    rm -rf ~/storage/downloads/datagen-11
+
+Keep the originals in ~/OpenBench/Client/Datagen (and Client\Datagen on the
+laptop) until the network is trained.
+
+
+ON A MAC (OR LINUX)
+--------------------------------------------------------------------------------
+The same script works there. Install huggingface_hub and log in once:
+
+    python3 -m pip install huggingface_hub
+    hf auth login
+
+Then, in the OpenBench folder:
+
+    python3 Scripts/upload_datagen.py 11
+
+
+IF SOMETHING GOES WRONG
+--------------------------------------------------------------------------------
+"huggingface_hub is not installed"
+    python is a venv without it. Use the system Python instead:
+    C:\Users\dell3\AppData\Local\Programs\Python\Python312\python.exe
+"externally-managed-environment" from pip (Mac with Homebrew Python)
+    Install it in a venv instead: python3 -m venv ~/hf-venv, then
+    ~/hf-venv/bin/pip install huggingface_hub. Log in with
+    ~/hf-venv/bin/hf auth login, and run the script with ~/hf-venv/bin/python.
+"Not logged in to Hugging Face"
+    hf auth login
+"No write access"
+    The account isn't in the 4pc-engine org. Add --pr to open a pull
+    request instead, then merge it in the dataset's Community tab.
