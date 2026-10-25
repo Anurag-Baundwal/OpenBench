@@ -69,13 +69,15 @@ def select_workload(request, machine):
             data['throughput'] = data['throughput'] / engine_freq[data['engine']]
 
     # With random_workload_assignment, skip the balancing of threads. Each Workload
-    # goes to a random test, weighted by throughput. Machines differ greatly in speed,
-    # so equal threads do not mean equal progress; random picks give every test the
-    # same share of every Machine's time, whatever its speed
+    # goes to a random test. Machines differ greatly in speed, so equal threads do
+    # not mean equal progress; random picks give every test the same share of every
+    # Machine's time, whatever its speed. A test's weight is its throughput over the
+    # length of its Workloads, so that the time, not the count of Workloads, follows
+    # the throughput when the tests have different time controls or Workload sizes
     if OPENBENCH_CONFIG['random_workload_assignment']:
         by_id   = { workload.id : workload for workload in candidates }
         choices = list(worker_dist.keys())
-        weights = [data['throughput'] for data in worker_dist.values()]
+        weights = [data['throughput'] / workload_length(by_id[id]) for id, data in worker_dist.items()]
         return by_id[random.choices(choices, weights=weights)[0]]
 
     # Step 4: Compute the Resource Ratios for each of the workloads, if we were assigned
@@ -101,6 +103,49 @@ def select_workload(request, machine):
     choices = [id for id, data in worker_dist.items() if data['ratio'] == min_ratio]
     weights = [data['throughput'] for id, data in worker_dist.items() if data['ratio'] == min_ratio]
     return by_id[random.choices(choices, weights=weights)[0]]
+
+def workload_length(workload):
+
+    # Rough length of one Workload in seconds, for a Machine at the test's reference
+    # NPS. Only the ratios between tests matter, so constant factors are left out
+
+    # Games played one after another by each concurrent game slot of the Machine
+    if workload.test_mode == 'SPSA' and workload.spsa_run.distribution_type == 'MULTIPLE':
+        games = workload.workload_size
+    else:
+        games = 2 * workload.workload_size
+
+    reference_nps = workload.scale_nps or 1000000
+
+    seconds = player_seconds(workload.dev_time_control, reference_nps) \
+            + player_seconds(workload.base_time_control, reference_nps)
+
+    return max(games * seconds, 0.001)
+
+def player_seconds(time_control, reference_nps):
+
+    # Seconds of thinking by one player in an average game. Games average 153 plies,
+    # 38 moves for each of the four players, in the PGNs of 5263 Client games
+    moves = 38
+
+    TimeControl = OpenBench.utils.TimeControl
+    control     = TimeControl.control_type(time_control)
+
+    if control == TimeControl.FIXED_NODES:
+        return moves * int(time_control.split('=')[1]) / reference_nps
+
+    if control == TimeControl.FIXED_TIME:
+        return moves * int(time_control.split('=')[1]) / 1000
+
+    if control == TimeControl.FIXED_DEPTH:
+        return moves * 0.1 # A guess, since the time per depth depends on the engine
+
+    # X/Y+Z gives Y seconds every X moves, Y+Z gives Y seconds once
+    period, _, clock = time_control.rpartition('/')
+    base, _, inc     = clock.partition('+')
+    periods          = moves / int(period) if period else 1
+
+    return periods * float(base) + moves * float(inc or 0)
 
 def filter_valid_workloads(request, machine):
 
