@@ -159,6 +159,7 @@ def create_new_test(request):
     test.scale_method      = request.POST['scale_method']
     test.scale_nps         = int(request.POST['scale_nps'])
     test.arch_filter       = request.POST.get('arch_filter', '').strip()
+    test.cpu_exclude       = request.POST.get('cpu_exclude', '').strip()
 
     test.test_mode         = request.POST['test_mode']
 
@@ -224,6 +225,7 @@ def create_new_tune(request):
     test.scale_method     = request.POST['scale_method']
     test.scale_nps        = int(request.POST['scale_nps'])
     test.arch_filter      = request.POST.get('arch_filter', '').strip()
+    test.cpu_exclude      = request.POST.get('cpu_exclude', '').strip()
 
     test.test_mode        = 'SPSA'
 
@@ -285,6 +287,7 @@ def create_new_datagen(request):
     test.scale_method      = request.POST['scale_method']
     test.scale_nps         = int(request.POST['scale_nps'])
     test.arch_filter       = request.POST.get('arch_filter', '').strip()
+    test.cpu_exclude       = request.POST.get('cpu_exclude', '').strip()
 
     test.test_mode         = 'DATAGEN'
 

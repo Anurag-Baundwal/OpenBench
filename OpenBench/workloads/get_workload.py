@@ -192,6 +192,10 @@ def filter_valid_workloads(request, machine):
     isa_name  = machine.info.get('isa_name', '')
     workloads = [x for x in workloads if OpenBench.utils.arch_filter_matches(x.arch_filter, isa_name)]
 
+    # Skip workloads that exclude this Machine's CPU
+    cpu_name  = machine.info.get('cpu_name', '')
+    workloads = [x for x in workloads if not OpenBench.utils.cpu_excluded(x.cpu_exclude, cpu_name)]
+
     # Skip workloads that we have insufficient threads to play
     options = [x for x in workloads if valid_hardware_assignment(x, machine)]
 

@@ -185,6 +185,19 @@ def arch_filter_arches(arch_filter):
     # The supported ISAs that an Arch Filter allows, for verification and display
     return [arch for arch in SUPPORTED_ARCHES if arch_filter_matches(arch_filter, arch)]
 
+def cpu_excluded(cpu_exclude, cpu_name):
+
+    # A regex searched for in the CPU name that a Machine reports, such as
+    # "Intel(R) Core(TM) i9-9880H CPU @ 2.30GHz", case insensitively. Matching
+    # Machines may not play the Workload. Empty, or broken, excludes nobody
+    if not cpu_exclude:
+        return False
+
+    try:
+        return re.search(cpu_exclude, cpu_name or '', re.IGNORECASE) is not None
+    except re.error:
+        return False
+
 def path_join(*args):
     return "/".join([f.lstrip("/").rstrip("/") for f in args]).rstrip('/')
 

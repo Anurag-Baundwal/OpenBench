@@ -25,6 +25,8 @@
 # requested. This will return the user to the index, or a login page, with some
 # indication as to success, or a reason for failure.
 
+import re
+
 import OpenBench.views
 
 from OpenBench.models import *
@@ -103,6 +105,13 @@ def tweak_workload(request, profile, workload):
 
     try:
         workload.info = request.POST['info']
+    except: pass
+
+    try: # A regex on the CPU names that may not play the Workload. Empty excludes none
+        cpu_exclude = request.POST['cpu_exclude'].strip()
+        if len(cpu_exclude) <= Test._meta.get_field('cpu_exclude').max_length:
+            re.compile(cpu_exclude)
+            workload.cpu_exclude = cpu_exclude
     except: pass
 
     return 'Workload was Modified!'

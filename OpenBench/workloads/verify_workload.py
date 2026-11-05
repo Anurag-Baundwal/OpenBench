@@ -101,6 +101,7 @@ def verify_test_creation(errors, request):
         (verify_greater_than   , 'throughput', 'Throughput', 0),
         (verify_syzygy_field   , 'syzygy_wdl', 'Syzygy WDL'),
         (verify_arch_filter    , 'arch_filter'),
+        (verify_cpu_exclude    , 'cpu_exclude'),
 
         # Verify everything about the Workload Settings
         (verify_integer        , 'workload_size', 'Workload Size'),
@@ -146,6 +147,7 @@ def verify_tune_creation(errors, request):
         (verify_greater_than          , 'throughput', 'Throughput', 0),
         (verify_syzygy_field          , 'syzygy_wdl', 'Syzygy WDL'),
         (verify_arch_filter           , 'arch_filter'),
+        (verify_cpu_exclude           , 'cpu_exclude'),
 
         # Verify the Scaling Mechanisms
         (verify_scale_method   , 'scale_method'),
@@ -210,6 +212,7 @@ def verify_datagen_creation(errors, request):
         (verify_greater_than   , 'throughput', 'Throughput', 0),
         (verify_syzygy_field   , 'syzygy_wdl', 'Syzygy WDL'),
         (verify_arch_filter    , 'arch_filter'),
+        (verify_cpu_exclude    , 'cpu_exclude'),
 
         # Verify everything about the Workload Settings
         (verify_integer        , 'workload_size', 'Workload Size'),
@@ -436,6 +439,21 @@ def verify_arch_filter(errors, request, field):
 
     if not OpenBench.utils.arch_filter_arches(arch_filter):
         errors.append('Arch Filter %s has no compatible arches' % (arch_filter))
+
+def verify_cpu_exclude(errors, request, field):
+
+    # An empty value excludes nobody, and any other must be a valid regex
+    cpu_exclude = request.POST.get(field, '').strip()
+    if not cpu_exclude:
+        return
+
+    max_length = Test._meta.get_field('cpu_exclude').max_length
+    if len(cpu_exclude) > max_length:
+        return errors.append('Excluded CPUs must be at most %d characters' % (max_length))
+
+    try: re.compile(cpu_exclude)
+    except re.error as error:
+        errors.append('Invalid Excluded CPUs regex: %s' % (error))
 
 
 def collect_github_info(errors, request, field):

@@ -225,6 +225,9 @@ class Test(Model):
     # Regex on the Machine's ISA, as in Fishtest. Empty allows every Machine
     arch_filter   = CharField(max_length=128, default='', blank=True)
 
+    # Regex on the Machine's CPU name. Matching Machines are skipped. Empty skips none
+    cpu_exclude   = CharField(max_length=128, default='', blank=True)
+
     # Tablebases and Match runner adjudicatoins
     syzygy_wdl  = CharField(max_length=16, default='OPTIONAL')
     syzygy_adj  = CharField(max_length=16, default='OPTIONAL')

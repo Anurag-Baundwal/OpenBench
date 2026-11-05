@@ -260,6 +260,12 @@
                     <input id="arch_filter" name="arch_filter" placeholder="Regex on the Worker ISA, e.g. ^armv8 (empty: all Workers)">
                 </div>
 
+                <!-- A regex on each Worker's CPU name, to keep some Workers off the Workload -->
+                <div class="row">
+                    <label for="cpu_exclude"> Excluded CPUs </label>
+                    <input id="cpu_exclude" name="cpu_exclude" placeholder="Regex on the Worker CPU name, e.g. 9880H|A520 (empty: none)">
+                </div>
+
                 <!-- Syzygy and adjudication do not apply to 4PC; the match runner adjudicates on its own.
                      No ids, so that Engine presets can never change these fixed values -->
                 <input type="hidden" name="syzygy_wdl" value="DISABLED">

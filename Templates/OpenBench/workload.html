@@ -60,6 +60,10 @@
                 <tr><td class="td-label">Arch Filter</td><td>{{workload|arch_filter_text}}</td></tr>
             {% endif %}
 
+            {% if workload.cpu_exclude %}
+                <tr><td class="td-label">Excluded CPUs</td><td>{{workload.cpu_exclude}}</td></tr>
+            {% endif %}
+
             {% if type == "TUNE" %}
                 <tr><td class="td-label">Alpha</td><td>{{workload.spsa_run.alpha}}</td></tr>
                 <tr><td class="td-label">Gamma</td><td>{{workload.spsa_run.gamma}}</td></tr>
@@ -162,7 +166,7 @@
             <pre class="long-statblock" id="long-statblock">{{workload|longStatBlock|linebreaksbr}}</pre>
         {% endif %}
 
-        <!-- Forum to modify the Priority, Throughput, or (Tests only) Workload Size -->
+        <!-- Forum to modify the Priority, Throughput, (Tests only) Workload Size, or Excluded CPUs -->
         <form method="POST" action="/{{type|lower}}/{{workload.id}}/MODIFY/">
             {% csrf_token %}
             <div class="form">
@@ -189,6 +193,11 @@
                             <input value="{{workload.workload_size}}" id="workload_size" name="workload_size">
                         </div>
                     {% endif %}
+
+                    <div class="row workflow-edit">
+                        <label for="cpu_exclude">Excluded CPUs</label>
+                        <input value="{{workload.cpu_exclude}}" id="cpu_exclude" name="cpu_exclude" placeholder="Regex on the Worker CPU name, e.g. 9880H (empty: none)">
+                    </div>
 
                     <!-- Edit Button: For Approvers or Test Authors -->
                     {% if profile.approver or profile.user.username == workload.author %}
