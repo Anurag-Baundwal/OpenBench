@@ -80,9 +80,15 @@ class TimeControl(object):
             moves = None if moves == '' else moves.rstrip('/')
             inc   = 0.0  if inc   is None else inc.lstrip('+')
 
-            # Format the time control for match runner cleanly
-            if moves is None: return '%.1f+%.2f' % (float(base), float(inc))
-            return '%d/%.1f+%.2f' % (int(moves), float(base), float(inc))
+            # Format the time control for match runner cleanly. A third decimal is
+            # kept when needed, so that odds like 2.5+0.025 are not rounded away
+            def fmt(value, digits):
+                text = '%.*f' % (digits, value)
+                return text if abs(float(text) - value) < 1e-9 else '%.3f' % (value)
+
+            base, inc = fmt(float(base), 1), fmt(float(inc), 2)
+            if moves is None: return '%s+%s' % (base, inc)
+            return '%d/%s+%s' % (int(moves), base, inc)
 
         print ('FAIL')
         import sys
