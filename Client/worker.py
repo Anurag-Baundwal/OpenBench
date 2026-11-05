@@ -58,7 +58,7 @@ from client import try_forever
 
 ## Basic configuration of the Client. These timeouts can be changed at will
 
-CLIENT_VERSION   = 66 # Client version to send to the Server
+CLIENT_VERSION   = 67 # Client version to send to the Server
 TIMEOUT_HTTP     = 30 # Timeout in seconds for HTTP requests
 TIMEOUT_ERROR    = 60 # Timeout in seconds when any errors are thrown
 TIMEOUT_WORKLOAD = 60 # Timeout in seconds between workload requests
@@ -495,8 +495,21 @@ class MatchRunner:
     @staticmethod
     def time_control_settings(config, scale_factor):
 
-        # The Server only accepts Workloads where Dev and Base share a time control
-        return scale_time_control(config.workload, scale_factor, 'dev')
+        dev  = scale_time_control(config.workload, scale_factor, 'dev')
+        base = scale_time_control(config.workload, scale_factor, 'base')
+
+        if base == dev:
+            return dev
+
+        # Time or node odds: Base is Engine 2, and gets its own limits. The Server
+        # only accepts odds between time controls of the same kind
+        if base[0] != dev[0]:
+            raise utils.OpenBenchFatalWorkerException('Dev and Base time controls differ in kind')
+
+        if dev[0] == '--tc':
+            return dev + ['--tc2', base[1], '--inc2', base[3]]
+
+        return dev + ['--limit2', base[1]]
 
     @staticmethod
     def output_settings(config, timestamp, runner_idx):

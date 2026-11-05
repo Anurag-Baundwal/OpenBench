@@ -86,7 +86,7 @@ def verify_test_creation(errors, request):
         (verify_options        , 'base_options', 'Threads', 'Base Options'),
         (verify_options        , 'base_options', 'Hash', 'Base Options'),
         (verify_time_control   , 'base_time_control', 'Base Time Control'),
-        (verify_no_time_odds   , 'dev_time_control', 'base_time_control'),
+        (verify_same_kind_of_tc, 'dev_time_control', 'base_time_control'),
 
         # Verify everything about the Test Settings
         (verify_book           , 'book_name', 'Book'),
@@ -263,14 +263,15 @@ def verify_time_control(errors, request, field, field_name):
     if OpenBench.utils.TimeControl.control_type(time_control) == OpenBench.utils.TimeControl.CYCLIC:
         errors.append('{0} cannot be cyclic (moves/time) with the 4pc_arena match runner'.format(field_name))
 
-def verify_no_time_odds(errors, request, dev_field, base_field):
+def verify_same_kind_of_tc(errors, request, dev_field, base_field):
 
-    # The 4pc_arena match runner applies a single time control to both engines
+    # Time or node odds are allowed, but the 4pc_arena match runner can only give
+    # the two engines limits of the same kind, ie both clocks or both fixed nodes
     try:
-        dev_time_control  = OpenBench.utils.TimeControl.parse(request.POST[dev_field])
-        base_time_control = OpenBench.utils.TimeControl.parse(request.POST[base_field])
-        if dev_time_control != base_time_control:
-            errors.append('Dev and Base must use the same Time Control with the 4pc_arena match runner')
+        dev_type  = OpenBench.utils.TimeControl.control_type(OpenBench.utils.TimeControl.parse(request.POST[dev_field]))
+        base_type = OpenBench.utils.TimeControl.control_type(OpenBench.utils.TimeControl.parse(request.POST[base_field]))
+        if dev_type != base_type:
+            errors.append('Dev and Base must use the same kind of Time Control with the 4pc_arena match runner')
     except: pass # Unparsable time controls are reported by verify_time_control()
 
 def verify_win_adj(errors, request, field):

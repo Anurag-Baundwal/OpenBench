@@ -155,6 +155,30 @@ class MatchConfig:
     sprt: SprtConfig | None = None
     nnue_opening_fallback: bool = False
     fens_start: int = 0
+    # Engine 2's own limits, for time or node odds. None plays Engine 1's.
+    limit_value2: int | None = None
+    base_time_ms2: int | None = None
+    increment_ms2: int | None = None
+
+    def engine_limit_value(self, number: int) -> int:
+        if number == 2 and self.limit_value2 is not None:
+            return self.limit_value2
+        return self.limit_value
+
+    def engine_base_time_ms(self, number: int) -> int:
+        if number == 2 and self.base_time_ms2 is not None:
+            return self.base_time_ms2
+        return self.base_time_ms
+
+    def engine_increment_ms(self, number: int) -> int:
+        if number == 2 and self.increment_ms2 is not None:
+            return self.increment_ms2
+        return self.increment_ms
+
+    @property
+    def has_odds(self) -> bool:
+        return (self.engine_limit_value(2), self.engine_base_time_ms(2), self.engine_increment_ms(2)) \
+            != (self.limit_value, self.base_time_ms, self.increment_ms)
 
 # Captures the final response to one UCI search, including protocol-level game
 # completion or position-rejection details when no move is returned.
@@ -1378,6 +1402,9 @@ MATCH_METADATA_DEFAULTS: dict[str, Any] = {
     "opening_attempts": 100,
     "pgn4_single_line": False,
     "nnue_output": False,
+    "tc2": None,
+    "inc2": None,
+    "limit2": None,
 }
 
 # Adds defaults for fields absent from metadata written by older runner
@@ -1565,30 +1592,40 @@ def generate_start(
     )
 
 # Builds either a fixed-limit search or a four-color clock search. Every color
-# retains its own time even though teammates share an engine process.
-def go_command(config: MatchConfig, clocks: dict[str, int]) -> str:
+# retains its own time even though teammates share an engine process. With time
+# odds each color's increment is that of the engine playing it, and fixed
+# limits are those of the engine to move (engine_number).
+def go_command(
+    config: MatchConfig,
+    clocks: dict[str, int],
+    color_engine: dict[str, int] | None = None,
+    engine_number: int = 1,
+) -> str:
     if config.limit_kind == "clock":
         times = " ".join(
             f"{UCI_CLOCK_PREFIX[color]}time {max(0, clocks[color])}"
             for color in TURN_ORDER
         )
         increments = " ".join(
-            f"{UCI_CLOCK_PREFIX[color]}inc {config.increment_ms}"
+            f"{UCI_CLOCK_PREFIX[color]}inc "
+            f"{config.engine_increment_ms(color_engine[color] if color_engine else 1)}"
             for color in TURN_ORDER
         )
         return f"go {times} {increments} silent"
-    return f"go {config.limit_kind} {config.limit_value} silent"
+    return f"go {config.limit_kind} {config.engine_limit_value(engine_number)} silent"
 
 # Gives clock searches the active color's remaining time, and movetime searches
 # their fixed time, plus the configured response grace. Node and depth searches
 # have no time bound, so, as with fastchess, they wait for bestmove without a
 # deadline. An engine that exits still ends the wait.
-def move_timeout(config: MatchConfig, clocks: dict[str, int], color: str) -> float:
+def move_timeout(
+    config: MatchConfig, clocks: dict[str, int], color: str, engine_number: int = 1
+) -> float:
     if config.limit_kind == "clock":
         remaining = max(0, clocks[color]) + max(0, config.margin_ms)
         return remaining / 1000 + config.timeout
     if config.limit_kind == "movetime":
-        return config.limit_value / 1000 + config.timeout
+        return config.engine_limit_value(engine_number) / 1000 + config.timeout
     return math.inf
 
 # Returns the opposing team result after a time, protocol, or move failure.
@@ -1718,7 +1755,11 @@ def play_game(
     bg_number = 2 if engine1_is_ry else 1
     moves = list(task.start.opening_moves)
     searches: list[dict[str, Any]] = []
-    clocks = {color: config.base_time_ms for color in TURN_ORDER}
+    color_engine = {
+        color: ry_number if TEAM_BY_COLOR[color] == "ry" else bg_number
+        for color in TURN_ORDER
+    }
+    clocks = {color: config.engine_base_time_ms(color_engine[color]) for color in TURN_ORDER}
     start_turn = fen_turn_index(task.start.fen)
     record: dict[str, Any] = {
         "game_id": task.game_id,
@@ -1815,8 +1856,9 @@ def play_game(
                     search = engine.search(
                         moves,
                         task.start.fen,
-                        "go depth 1" if fifty_moves else go_command(config, clocks),
-                        move_timeout(config, clocks, color),
+                        "go depth 1" if fifty_moves
+                        else go_command(config, clocks, color_engine, engine_number),
+                        move_timeout(config, clocks, color, engine_number),
                     )
                 except TimeoutError:
                     result = winner_for_failure(team)
@@ -1870,7 +1912,7 @@ def play_game(
                         record, result, f"engine{engine_number}_time_loss",
                         moves, clocks, task.engine1_team
                     )
-                clocks[color] += config.increment_ms
+                clocks[color] += config.engine_increment_ms(engine_number)
             # The tracker refuses only moves that no position allows, such as
             # moving another color's piece
             illegal = legal is not None and search.bestmove not in legal
@@ -2011,16 +2053,17 @@ def print_summary(
 
 
 def sprt_control_text(config: MatchConfig) -> str:
-    if config.limit_kind == "clock":
-        base_seconds = config.base_time_ms / 1000
-        base = f"{base_seconds:.3f}".rstrip("0").rstrip(".")
-        control = f"{base}+{config.increment_ms / 1000:.2f}"
-    elif config.limit_kind == "nodes":
-        control = f"Nodes={config.limit_value}"
-    elif config.limit_kind == "depth":
-        control = f"Depth={config.limit_value}"
-    else:
-        control = f"Move={config.limit_value}ms"
+    def one(number: int) -> str:
+        if config.limit_kind == "clock":
+            base_seconds = config.engine_base_time_ms(number) / 1000
+            base = f"{base_seconds:.3f}".rstrip("0").rstrip(".")
+            return f"{base}+{config.engine_increment_ms(number) / 1000:.2f}"
+        if config.limit_kind == "nodes":
+            return f"Nodes={config.engine_limit_value(number)}"
+        if config.limit_kind == "depth":
+            return f"Depth={config.engine_limit_value(number)}"
+        return f"Move={config.engine_limit_value(number)}ms"
+    control = f"{one(1)} vs {one(2)}" if config.has_odds else one(1)
     return (
         f"{control} Th={config.engine1.threads} "
         f"Hash={config.engine1.hash_mb}MB Conc={config.workers}"
@@ -2168,11 +2211,16 @@ def validate_rules_commands(
 
 # Produces the human-readable search limit used in the start banner.
 def control_text(config: MatchConfig) -> str:
-    if config.limit_kind == "clock":
-        return f"tc {config.base_time_ms}ms + {config.increment_ms}ms"
-    if config.limit_kind == "movetime":
-        return f"movetime {config.limit_value}ms"
-    return f"{config.limit_kind} {config.limit_value}"
+    def one(number: int) -> str:
+        if config.limit_kind == "clock":
+            return (f"tc {config.engine_base_time_ms(number)}ms + "
+                    f"{config.engine_increment_ms(number)}ms")
+        if config.limit_kind == "movetime":
+            return f"movetime {config.engine_limit_value(number)}ms"
+        return f"{config.limit_kind} {config.engine_limit_value(number)}"
+    if config.has_odds:
+        return f"Engine 1 {one(1)}, Engine 2 {one(2)}"
+    return one(1)
 
 # Summarizes the match, opening policy, and scoring perspective before workers
 # begin producing interleaved output.
@@ -3004,6 +3052,9 @@ def run_match(args: argparse.Namespace) -> int:
                         sprt=args.sprt_config,
                         nnue_opening_fallback=bool(args.nnue_data_seeds),
                         fens_start=args.fens_start,
+                        limit_value2=args.limit2,
+                        base_time_ms2=args.tc2,
+                        increment_ms2=args.inc2,
     )
     validate_sprt_config(config, continue_on_error=args.continue_on_error)
     if arbiter is not None:
@@ -3039,6 +3090,9 @@ def run_match(args: argparse.Namespace) -> int:
         "limit_value": args.limit_value,
         "tc": args.tc,
         "inc": args.inc,
+        "tc2": args.tc2,
+        "inc2": args.inc2,
+        "limit2": args.limit2,
         "margin": args.margin,
         "max_plies": args.max_plies,
         "opening_plies": args.opening_plies,
@@ -3418,6 +3472,13 @@ def build_parser() -> argparse.ArgumentParser:
     limit.add_argument("--movetime", "--fixed", type=int)
     limit.add_argument("--tc", type=int, help="base time in milliseconds")
     parser.add_argument("--inc", type=int, default=0, help="increment in milliseconds")
+    parser.add_argument("--tc2", type=int,
+                        help="Engine 2's base time in milliseconds, for time odds (default: --tc)")
+    parser.add_argument("--inc2", type=int,
+                        help="Engine 2's increment in milliseconds (default: --inc)")
+    parser.add_argument("--limit2", type=int,
+                        help="Engine 2's --nodes, --depth or --movetime value, for odds "
+                             "(default: Engine 1's)")
     parser.add_argument("--margin", type=int, default=50, help="clock-loss margin in milliseconds")
     parser.add_argument(
         "--timeout",
@@ -3629,6 +3690,16 @@ def main() -> int:
         parser.error("--tc must be greater than 0")
     if args.limit_kind != "clock" and args.inc:
         parser.error("--inc requires --tc")
+    if args.limit_kind != "clock" and (args.tc2 is not None or args.inc2 is not None):
+        parser.error("--tc2 and --inc2 require --tc")
+    if args.limit_kind == "clock" and args.limit2 is not None:
+        parser.error("--limit2 requires --nodes, --depth or --movetime; use --tc2 with --tc")
+    if args.tc2 is not None and args.tc2 <= 0:
+        parser.error("--tc2 must be greater than 0")
+    if args.inc2 is not None and args.inc2 < 0:
+        parser.error("--inc2 must be at least 0")
+    if args.limit2 is not None and args.limit2 <= 0:
+        parser.error("--limit2 must be greater than 0")
     if not args.arbiter and (args.arbiter_options or args.arbiter_option):
         parser.error("--arbiter-options and --arbiter-option require --arbiter")
     if args.sprt:
