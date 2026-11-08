@@ -168,6 +168,15 @@ class Result(Model):
     crashes  = IntegerField(default=0)
     timeloss = IntegerField(default=0)
 
+    # FFA: one sample per group of 4 games (Dev in each seat once vs 3 Base): its pairwise placement score
+    ffa_groups = IntegerField(default=0)
+    ffa_sum    = FloatField(default=0.0)
+    ffa_sumsq  = FloatField(default=0.0)
+    ffa_p1     = IntegerField(default=0) # Dev's finishing places, over all its games
+    ffa_p2     = IntegerField(default=0)
+    ffa_p3     = IntegerField(default=0)
+    ffa_p4     = IntegerField(default=0)
+
     # Total counters for nodes and ms for NPS tracking
     dev_nodes         = BigIntegerField(default=0)
     dev_time          = BigIntegerField(default=0)
@@ -257,6 +266,16 @@ class Test(Model):
     DD     = IntegerField(default=0) # Pentanomial
     DW     = IntegerField(default=0) # Pentanomial
     WW     = IntegerField(default=0) # Pentanomial
+
+    # FFA: sum and sum of squares of the group scores, and Dev's places (see Result). For FFA tests the
+    # Trinomial fields hold the pairwise placement results (Dev seat vs Base seat), and games = 4 x groups
+    ffa_groups = IntegerField(default=0)
+    ffa_sum    = FloatField(default=0.0)
+    ffa_sumsq  = FloatField(default=0.0)
+    ffa_p1     = IntegerField(default=0)
+    ffa_p2     = IntegerField(default=0)
+    ffa_p3     = IntegerField(default=0)
+    ffa_p4     = IntegerField(default=0)
 
     # Switching all future tests to Pentanomial
     use_tri   = BooleanField(default=False)

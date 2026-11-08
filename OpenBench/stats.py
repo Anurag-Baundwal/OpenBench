@@ -163,6 +163,48 @@ def logistic_elo(x):
     return -400 * math.log10(1 / x - 1)
 
 
+# FFA (4-player free-for-all), as in the engine repo's tools/ffa_match.py. A sample is the pairwise
+# placement score of one group of 4 games (Dev in each seat once, against 3 Base copies): every
+# (Dev seat, Base seat) pair scores 1 if Dev finished with more points, 0.5 if equal, 0 if fewer.
+# Bounds are logistic Elo of that score. Tests keep only the count, sum and sum of squares.
+
+FFA_MIN_GROUPS = 20   # no verdict before this many groups
+FFA_VAR_FLOOR  = 0.01 # about the variance of 12 independent pairwise results
+
+def ffa_elo_to_score(elo):
+    return 1.0 / (1.0 + 10.0 ** (-elo / 400.0))
+
+def ffa_score_to_elo(s):
+    s = min(max(s, 1e-6), 1 - 1e-6)
+    return -400.0 * math.log10(1.0 / s - 1.0)
+
+def FfaSPRT(n, total, totalsq, elo0, elo1):
+
+    # GSPRT with the normal approximation and the samples' own variance (with a floor)
+    if n < 2:
+        return 0.0
+
+    mean = total / n
+    var  = max(totalsq / n - mean * mean, FFA_VAR_FLOOR)
+    s0, s1 = ffa_elo_to_score(elo0), ffa_elo_to_score(elo1)
+
+    return n * ((mean - s0) ** 2 - (mean - s1) ** 2) / (2 * var)
+
+def FfaElo(n, total, totalsq):
+
+    # Returns (lower, elo, upper): the 95% interval from the sample standard deviation
+    if n < 1:
+        return (0.0, 0.0, 0.0)
+
+    mean = total / n
+    sd   = math.sqrt(max(0.0, (totalsq - n * mean * mean) / (n - 1))) if n > 1 else 0.0
+    half = 1.96 * sd / math.sqrt(n) if n > 1 else 0.5
+
+    lower = ffa_score_to_elo(max(1e-6, mean - half))
+    upper = ffa_score_to_elo(min(1 - 1e-6, mean + half))
+    return (lower, ffa_score_to_elo(mean), upper)
+
+
 if __name__ == '__main__':
 
     R3 = (22569, 44137, 22976)
