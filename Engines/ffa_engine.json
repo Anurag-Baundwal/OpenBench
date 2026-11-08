@@ -1,5 +1,6 @@
 {
     "private" : false,
+    "ffa"     : true,
     "nps"     : 440000,
     "source"  : "https://github.com/Anurag-Baundwal/4pc-ffa-engine",
 

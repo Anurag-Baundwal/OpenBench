@@ -21,7 +21,8 @@
                 if (!engines.hasOwnProperty(engine))
                     engine = document.getElementById('dev_engine').value;
                 change_engine(engine, 'dev', '{{workload}}');
-                // No https://github.com/ prefix is forced here: engines may live in local git repositories
+                enforce_default_text('dev_repo', 'https://github.com/');
+                enforce_default_text('base_repo', 'https://github.com/');
             }, false
         );
     </script>

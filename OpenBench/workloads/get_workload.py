@@ -418,9 +418,9 @@ def game_distribution(test, machine):
         'rounds-per-runner' : 2 * test.workload_size * (1 if is_multiple_spsa else max_concurrency),
     }
 
-    # FFA (every SPRT and GAMES test here): each concurrent game slot plays workload_size groups of
-    # 4 games. Only one of a game's 4 engines searches at a time, so a slot needs one thread
-    if test.test_mode in ('SPRT', 'GAMES'):
+    # FFA tests: each concurrent game slot plays workload_size groups of 4 games. Only one of a
+    # game's 4 engines searches at a time, so a slot needs one thread
+    if test.ffa and test.test_mode in ('SPRT', 'GAMES'):
         distribution['groups-per-runner'] = test.workload_size * max_concurrency
 
     return distribution

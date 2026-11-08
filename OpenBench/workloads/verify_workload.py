@@ -51,6 +51,10 @@ def verify_workload(request, workload_type):
 
     errors = []
 
+    # FFA engines are tested with ffa_match.py, which plays SPRT and GAMES tests only
+    if workload_type != 'TEST' and is_ffa_engine(request.POST.get('dev_engine', '')):
+        errors.append('FFA engines support SPRT and GAMES tests only')
+
     if workload_type == 'TEST':
         verify_test_creation(errors, request)
         dev  = collect_github_info(errors, request, 'dev')
@@ -279,11 +283,22 @@ def verify_same_kind_of_tc(errors, request, dev_field, base_field):
             errors.append('Dev and Base must use the same kind of Time Control with the 4pc_arena match runner')
     except: pass # Unparsable time controls are reported by verify_time_control()
 
+def is_ffa_engine(name):
+    config = EngineConfig.objects.filter(name=name).first()
+    return bool(config and config.ffa)
+
 def verify_ffa_same_tc(errors, request, dev_field, base_field):
 
+    # Dev and Base are both FFA engines or both Teams engines
+    dev_ffa  = is_ffa_engine(request.POST.get('dev_engine', ''))
+    base_ffa = is_ffa_engine(request.POST.get('base_engine', ''))
+    if dev_ffa != base_ffa:
+        errors.append('Dev and Base must both be FFA engines, or both Teams engines')
+        return
+
     # FFA tests use the engine repo's ffa_match.py, which plays every seat at one time control
-    try: assert request.POST[dev_field] == request.POST[base_field]
-    except: errors.append('FFA tests need the same Time Control for Dev and Base')
+    if dev_ffa and request.POST[dev_field] != request.POST[base_field]:
+        errors.append('FFA tests need the same Time Control for Dev and Base')
 
 def verify_win_adj(errors, request, field):
     try:

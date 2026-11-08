@@ -69,6 +69,9 @@ def engine_fields(fname, name, conf):
     if type(conf.get('private')) != bool:
         raise CommandError('%s must contain a boolean "private"' % (fname))
 
+    if type(conf.get('ffa', False)) != bool:
+        raise CommandError('%s: \"ffa\" must be a boolean' % (fname))
+
     # Missing preset types were previously filled in when the file was loaded
     presets = { x : conf.get(x) or { 'default' : {} } for x in PRESET_TYPES }
     for group in presets.values():
@@ -81,6 +84,7 @@ def engine_fields(fname, name, conf):
 
     return {
         'private'         : conf['private'],
+        'ffa'             : conf.get('ffa', False),
         'nps'             : conf['nps'],
         'source'          : conf['source'],
         'build_path'      : build.get('path', ''),

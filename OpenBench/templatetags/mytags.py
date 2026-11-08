@@ -65,7 +65,7 @@ def gitDiffLink(test):
     return OpenBench.utils.path_join(repo, 'compare',
         '{0}..{1}'.format(test.base.sha[:8], test.dev.sha[:8]))
 
-## FFA: this instance only plays 4-player free-for-all, so SPRT and GAMES tests are FFA tests.
+## FFA tests (Test.ffa): SPRT and GAMES tests of 4-player free-for-all engines.
 ## Results are groups of 4 games scored by pairwise placement (see OpenBench.stats.FfaSPRT)
 
 def ffaElo(test):
@@ -92,7 +92,7 @@ def ffaLines(test):
 
 def shortStatBlock(test):
 
-    if test.test_mode in ('SPRT', 'GAMES'):
+    if test.ffa and test.test_mode in ('SPRT', 'GAMES'):
         lines = ffaLines(test)
         first = lines['llr'] if test.test_mode == 'SPRT' else lines['elo']
         return '\n'.join([first, lines['games'], lines['pairs'], lines['places']])
@@ -134,7 +134,7 @@ def longStatBlock(test):
     timecontrol = test.dev_time_control + ['s', '']['=' in test.dev_time_control]
     type_text   = 'SPRT' if test.test_mode == 'SPRT' else 'Conf'
 
-    if test.test_mode in ('SPRT', 'GAMES'):
+    if test.ffa and test.test_mode in ('SPRT', 'GAMES'):
         lower, elo, upper = ffaElo(test)
         score = test.ffa_sum / test.ffa_groups if test.ffa_groups else 0.5
         lines = [
@@ -209,7 +209,7 @@ def workerStatBlock(test):
 
     assert test.test_mode != 'SPSA'
 
-    if test.test_mode in ('SPRT', 'GAMES'):
+    if test.ffa and test.test_mode in ('SPRT', 'GAMES'):
         lines = ffaLines(test)
         out   = [lines['elo'], lines['games'], lines['pairs'], lines['places']]
         if test.test_mode == 'SPRT':

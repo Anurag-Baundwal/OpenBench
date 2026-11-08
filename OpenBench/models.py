@@ -56,6 +56,10 @@ class EngineConfig(Model):
     source  = CharField(max_length=1024)
     enabled = BooleanField(default=True)
 
+    # 4-player free-for-all engine: its SPRT/GAMES tests are played by ffa_match.py and scored by
+    # pairwise placement (Test.ffa_*). Teams engines play 2v2 games with pentanomial results
+    ffa     = BooleanField(default=False)
+
     # Space seperated lists, kept as strings for the sake of the edit forms
     build_path      = CharField(max_length=64, blank=True)
     build_compilers = CharField(max_length=64, blank=True)
@@ -267,6 +271,7 @@ class Test(Model):
     DW     = IntegerField(default=0) # Pentanomial
     WW     = IntegerField(default=0) # Pentanomial
 
+    ffa        = BooleanField(default=False) # Dev's EngineConfig.ffa when the test was created
     # FFA: sum and sum of squares of the group scores, and Dev's places (see Result). For FFA tests the
     # Trinomial fields hold the pairwise placement results (Dev seat vs Base seat), and games = 4 x groups
     ffa_groups = IntegerField(default=0)

@@ -14,6 +14,7 @@ def engine_config_to_dict(config):
     # Matches the shape of the Engines/<name>.json files these replaced
     return {
         'private' : config.private,
+        'ffa'     : config.ffa,
         'nps'     : config.nps,
         'source'  : config.source,
         'build'   : config.build(),
