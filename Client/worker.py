@@ -354,6 +354,13 @@ class ServerReporter:
         payload['trinomial'  ] = ' '.join(map(str, payload['trinomial'  ]))
         payload['pentanomial'] = ' '.join(map(str, payload['pentanomial']))
 
+        # FFA: "groups sum sumsq p1 p2 p3 p4", summed over the finished groups
+        if any('ffa' in batch for batch in batches):
+            ffa = [0, 0.0, 0.0, 0, 0, 0, 0]
+            for batch in batches:
+                ffa = [x + y for x, y in zip(ffa, batch.get('ffa', [0] * 7))]
+            payload['ffa'] = '%d %r %r %d %d %d %d' % tuple(ffa)
+
         if config.workload['test']['type'] == 'SPSA':
 
             # Server expects a delta vector, already ordered by Parameter index
@@ -699,6 +706,159 @@ class MatchRunner:
 
         return bz2.compress(''.join(compressed_text).encode('utf-8'))
 
+class FfaRunner:
+
+    ## 4-player free-for-all tests, played by ffa_match.py (the 4PC FFA engine's tools/ffa_match.py).
+    ## The Server marks them with 'groups-per-runner'. A group is 4 games from one opening, Dev in each
+    ## seat once against 3 copies of Base; its pairwise placement score is one sample for the GSPRT.
+
+    # ffa_match.py --group-lines, ie "Finished group 7: score 0.583333 pairs 6 2 4 places 1 2 1 0 errors 0 {..}"
+    FINISHED_GROUP = re.compile(r'^Finished group (\d+): score (\S+) pairs (\d+) (\d+) (\d+) '
+                                r'places (\d+) (\d+) (\d+) (\d+) errors (\d+) \{(.*)\}$')
+
+    @staticmethod
+    def is_ffa(config):
+        return 'groups-per-runner' in config.workload['distribution']
+
+    @staticmethod
+    def record_name(config, timestamp, runner_idx):
+        test_id   = int(config.workload['test']['id'])
+        result_id = int(config.workload['result']['id'])
+        return 'PGNs/%d.%d.%d.%d.ffa.jsonl' % (test_id, result_id, timestamp, runner_idx)
+
+    @staticmethod
+    def command(config, dev_cmd, base_cmd, scale_factor, timestamp, runner_idx):
+
+        test   = config.workload['test']
+        groups = config.workload['distribution']['groups-per-runner']
+
+        command = [sys.executable, '-u', 'ffa_match.py',
+            '--engine1', os.path.join('Engines', dev_cmd),
+            '--engine2', os.path.join('Engines', base_cmd)]
+
+        # Every option is passed to the engine, but Threads: ffa_match.py runs one search per engine
+        for flag, branch in (('--option1', 'dev'), ('--option2', 'base')):
+            for name, value in re.findall(r'(\S+?)=("[^"]*"|\'[^\']*\'|\S*)', test[branch]['options']):
+                if name != 'Threads':
+                    command += [flag, '%s=%s' % (name, value.strip('"\''))]
+
+        # The Server requires Dev and Base to share the time control: --tc/--inc/--margin, or a fixed limit
+        command += scale_time_control(config.workload, scale_factor, 'dev')
+
+        command += [
+            '--concurrency', str(config.workload['distribution']['concurrency-per']),
+            '--max-groups' , str(groups),
+            '--seed'       , str(test['book_seed']),
+            '--group-lines', '--quiet',
+            '--out'        , FfaRunner.record_name(config, timestamp, runner_idx),
+        ]
+
+        # Each runner plays its own slice of the shuffled book
+        if test['book']['name'].upper() != 'NONE':
+            command += ['--book', os.path.join('Books', test['book']['name']),
+                        '--book-start', str(test['book_index'] + runner_idx * groups)]
+
+        return command
+
+    @staticmethod
+    def parse(line):
+
+        # A finished group as a result for the Server, or None
+        if not (match := FfaRunner.FINISHED_GROUP.match(line)):
+            return None
+
+        score            = float(match.group(2))
+        wins, draws, los = (int(match.group(x)) for x in (3, 4, 5))
+        places           = [int(match.group(x)) for x in (6, 7, 8, 9)]
+        errors           = int(match.group(10))
+
+        return {
+            'group'      : int(match.group(1)),
+            'ffa'        : [1, score, score * score] + places,
+            'trinomial'  : [los, draws, wins],
+            'pentanomial': [0, 0, 0, 0, 0],
+            'crashes'    : 0,
+            'timelosses' : 0,
+            'illegals'   : errors, # illegal moves, or no move, as seen by ffa_match.py's referee
+            'reasons'    : match.group(11),
+        }
+
+    @staticmethod
+    def describe(result, groups):
+        score  = result['ffa'][1]
+        places = '/'.join(str(x) for x in result['ffa'][3:])
+        text   = 'Group %d/%d: score %.3f, Dev places 1st/2nd/3rd/4th %s' % (result['group'] + 1, groups, score, places)
+        if result['illegals']:
+            text += ', %d errors' % (result['illegals'])
+        return text
+
+    @staticmethod
+    def report_errors(config, timestamp, runner_cnt):
+
+        # Games in which an engine played an illegal move or gave none, with the engines' recent I/O
+        for x in range(runner_cnt):
+            fname = FfaRunner.record_name(config, timestamp, x)
+            if not os.path.isfile(fname):
+                continue
+            with open(fname, encoding='utf-8') as fin:
+                for line in fin:
+                    record = json.loads(line) if line.strip() else {}
+                    for error in record.get('errors', []):
+                        details = json.dumps({ k : record.get(k) for k in ('pattern', 'fen', 'moves', 'traces') }, indent=1)
+                        ServerReporter.report_engine_error(config, 'FFA: %s' % (error), details)
+
+def run_and_parse_ffa_runner(config, command, runner_idx, results_queue, abort_flag, runners):
+
+    # As run_and_parse_runner(), for ffa_match.py: one result per finished group
+
+    if abort_flag.is_set():
+        return
+
+    print('\n[#%d] Launching FFA match runner...\n%s\n' % (runner_idx, shlex.join(command)))
+
+    env    = dict(os.environ, PYTHONIOENCODING='utf-8')
+    runner = Popen(command, stdout=PIPE, stderr=STDOUT, env=env)
+    runners.append(runner)
+
+    output = collections.deque(maxlen=100)
+    groups = config.workload['distribution']['groups-per-runner']
+
+    for line in iter(runner.stdout.readline, b''):
+
+        if abort_flag.is_set():
+            break
+
+        line = line.decode('utf-8', errors='replace').strip()
+        output.append(line)
+
+        if (result := FfaRunner.parse(line)):
+            print('[#%d] %s' % (runner_idx, FfaRunner.describe(result, groups)))
+            result['runner_idx'] = runner_idx
+            results_queue.put(result)
+
+        elif line and not line.startswith(('A = ', 'B = ', 'patterns ', '=== result', 'groups ', 'game ends', 'time ')):
+            print('[#%d] %s' % (runner_idx, line))
+
+    if abort_flag.is_set():
+        kill_process_tree(runner.pid)
+
+    if runner.wait() in (0, 130) or abort_flag.is_set():
+        return
+
+    results_queue.put({
+        'ffa'        : [0, 0.0, 0.0, 0, 0, 0, 0],
+        'trinomial'  : [0, 0, 0],
+        'pentanomial': [0, 0, 0, 0, 0],
+        'crashes'    : 1,
+        'timelosses' : 0,
+        'illegals'   : 0,
+        'runner_idx' : runner_idx,
+    })
+    abort_flag.set()
+
+    message = 'FFA match runner failed, exit code %d' % (runner.returncode)
+    raise utils.OpenBenchMatchRunnerFailedException(message, '\n'.join(output))
+
 class ResultsReporter(object):
 
     ## Handles idle looping while reading from the results Queue that the match runner
@@ -777,7 +937,8 @@ class ResultsReporter(object):
             else: # Send all of the queued Results at once
                 response = ServerReporter.report_results(self.config, self.pending).json()
                 self.last_report = time.time()
-                self.pairs_sent += sum(sum(result['pentanomial']) for result in self.pending)
+                # FFA results count groups, so the Test's results are printed every RATING_INTERVAL groups
+                self.pairs_sent += sum(sum(result['pentanomial']) + result.get('ffa', [0])[0] for result in self.pending)
                 self.pending = []
 
                 # The Server replies with the whole Test's results, from every Worker.
@@ -1184,10 +1345,15 @@ def complete_workload(config):
     concurrency_per = config.workload['distribution']['concurrency-per']
     rounds_per      = config.workload['distribution']['rounds-per-runner']
 
+    is_ffa = FfaRunner.is_ffa(config)
+
     print () # Record this information
     print ('%d match runner copies' % (runner_cnt))
     print ('%d concurrent games per copy' % (concurrency_per))
-    print ('%d total rounds per match runner copy\n' % (rounds_per))
+    if is_ffa:
+        print ('%d groups of 4 FFA games per match runner copy\n' % (config.workload['distribution']['groups-per-runner']))
+    else:
+        print ('%d total rounds per match runner copy\n' % (rounds_per))
 
     # Launch and manage all of the match runner workers
     with ThreadPoolExecutor(max_workers=runner_cnt) as executor:
@@ -1199,8 +1365,12 @@ def complete_workload(config):
 
         tasks = [] # Create each of the match runner workers
         for x in range(runner_cnt):
-            cmd = build_runner_command(config, dev_name, base_name, scale_factor, timestamp, x)
-            tasks.append(executor.submit(run_and_parse_runner, config, cmd, x, results, abort_flag, runners))
+            if is_ffa:
+                cmd = FfaRunner.command(config, dev_name, base_name, scale_factor, timestamp, x)
+                tasks.append(executor.submit(run_and_parse_ffa_runner, config, cmd, x, results, abort_flag, runners))
+            else:
+                cmd = build_runner_command(config, dev_name, base_name, scale_factor, timestamp, x)
+                tasks.append(executor.submit(run_and_parse_runner, config, cmd, x, results, abort_flag, runners))
 
         # Process the Queue until we exit, finish, or are told to stop by the server
         try:
@@ -1208,7 +1378,10 @@ def complete_workload(config):
             rr.process_until_finished()
             MatchRunner.kill_everything(runners, dev_name, base_name)
             concurrent.futures.wait(tasks)
-            rr.send_errors(timestamp, runner_cnt)
+            if is_ffa:
+                FfaRunner.report_errors(config, timestamp, runner_cnt)
+            else:
+                rr.send_errors(timestamp, runner_cnt)
 
         # Kill everything during an Exception, but print it
         except (Exception, KeyboardInterrupt):
@@ -1216,19 +1389,23 @@ def complete_workload(config):
             MatchRunner.kill_everything(runners, dev_name, base_name)
             raise
 
-        pgn_files = [MatchRunner.pgn_name(config, timestamp, x) for x in range(runner_cnt)]
-        records   = sum([MatchRunner.read_records(config, timestamp, x) for x in range(runner_cnt)], [])
+        # FFA games are kept as ffa_match.py's .ffa.jsonl records in PGNs/; there are no PGN4 files
+        # or per-move NPS records to send
+        if not is_ffa:
 
-        for x in range(runner_cnt):
-            MatchRunner.delete_record_sidecars(config, timestamp, x)
+            pgn_files = [MatchRunner.pgn_name(config, timestamp, x) for x in range(runner_cnt)]
+            records   = sum([MatchRunner.read_records(config, timestamp, x) for x in range(runner_cnt)], [])
 
-        # Submit NPS stats
-        if config.workload['test']['type'] in ('SPRT', 'GAMES'):
-            ServerReporter.report_nps_stats(config, MatchRunner.collect_nps_stats(records, scale_factor))
+            for x in range(runner_cnt):
+                MatchRunner.delete_record_sidecars(config, timestamp, x)
 
-        # Upload the PGN if requested
-        if config.workload['test']['upload_pgns'] != 'FALSE':
-            ServerReporter.report_pgn(config, MatchRunner.compress_pgn_files(pgn_files))
+            # Submit NPS stats
+            if config.workload['test']['type'] in ('SPRT', 'GAMES'):
+                ServerReporter.report_nps_stats(config, MatchRunner.collect_nps_stats(records, scale_factor))
+
+            # Upload the PGN if requested
+            if config.workload['test']['upload_pgns'] != 'FALSE':
+                ServerReporter.report_pgn(config, MatchRunner.compress_pgn_files(pgn_files))
 
         # A match runner exiting with an error, rather than finishing its games, is
         # usually an engine crashing. Report it, and stop taking this Workload
@@ -1330,6 +1507,10 @@ def safe_download_engine(config, branch, net_path):
     commit_sha  = config.workload['test'][branch]['sha']
     source      = config.workload['test'][branch]['source']
     private     = config.workload['test'][branch]['private']
+
+    # Engines kept in a git repository on the Server's machine are downloaded from the Server itself
+    if source.startswith('/'):
+        source = utils.url_join(config.server, source)
 
     bin_name = utils.engine_binary_name(engine, commit_sha, net_path)
     out_path = os.path.join('Engines', bin_name)
