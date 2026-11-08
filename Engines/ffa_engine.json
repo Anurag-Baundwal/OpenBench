@@ -1,13 +1,13 @@
 {
-    "private" : true,
+    "private" : false,
     "nps"     : 440000,
-    "source"  : "local:C:/Users/dell3/source/repos7/4pc-ffa-engine",
+    "source"  : "https://github.com/Anurag-Baundwal/4pc-ffa-engine",
 
     "build" : {
         "path"      : "",
-        "compilers" : ["g++"],
+        "compilers" : ["g++", "clang++"],
         "cpuflags"  : [],
-        "systems"   : ["Windows", "Linux", "Android"]
+        "systems"   : ["Windows", "Linux", "Darwin", "Android"]
     },
 
     "test_presets" : {

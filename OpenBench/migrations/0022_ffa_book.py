@@ -1,6 +1,5 @@
 # Adds ffa_human_ply8.txt: FEN4 positions after 8 plies of standard chess.com FFA games, all four
-# players alive (the 4PC FFA engine's books/human_ply8.txt). This instance only plays FFA, so the
-# Teams books are disabled.
+# players alive (the 4PC FFA engine's books/human_ply8.txt). The Teams books stay as they are.
 
 from django.db import migrations
 
@@ -15,7 +14,6 @@ def create_ffa_book(apps, schema_editor):
             'enabled' : True,
         })
 
-    Book.objects.filter(name__in=['fens.txt', 'fens_100k.txt']).update(enabled=False)
 
 class Migration(migrations.Migration):
 
