@@ -1191,6 +1191,13 @@ def determine_scale_factor(config, dev_name, base_name):
     base_nps = safe_run_benchmarks(config, 'base', base_name)
     ServerReporter.report_nps(config, dev_nps, base_nps)
 
+    # FFA tests play their nominal time control. On the laptop the loaded bench ranged from 266k
+    # to 444k NPS (thermal throttling), which scaled one test's time control from 1.8x to 3x.
+    # The benches above still check the build (Bench) and report the speed
+    if FfaRunner.is_ffa(config):
+        print ('\nScale Factor: 1 (FFA tests are not scaled)')
+        return 1.0
+
     dev_factor = base_factor = None
 
     # Scaling is only done relative to the Dev Engine

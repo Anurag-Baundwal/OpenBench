@@ -27,10 +27,9 @@ Create Test: engine ffa_engine, source local:C:/Users/dell3/source/repos7/4pc-ff
 - Priority (higher runs first) and Throughput (share among tests of the same priority) can be
   changed on a running test, and tests can be stopped and resumed from their page.
 
-Time controls scale with the bench speed: the engine's reference NPS is 440000, the laptop's bench
-with 6 games running. Update Engines/ffa_engine.json and run
-  python manage.py import_engines Engines/ffa_engine.json
-if that changes (new engine speed, other machines).
+Time controls are not scaled: FFA tests play their nominal time control on every Worker. The laptop's
+loaded bench varies too much with thermal throttling (266k-444k NPS) to scale by it. The bench still
+checks each build, and the engine's reference NPS (440000) is only used for the scheduling estimates.
 
 Tablet (later)
 --------------
