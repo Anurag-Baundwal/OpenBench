@@ -361,7 +361,11 @@ def workload_to_dictionary(test, result, machine):
         pairs_per_cnt = workload['distribution']['rounds-per-runner'] // 2
         per_opening   = 2 if (test.test_mode == 'DATAGEN' and not test.play_reverses) else 1
 
-        test.book_index += runner_cnt * pairs_per_cnt * per_opening
+        # FFA: one opening per group of 4 games
+        if 'groups-per-runner' in workload['distribution']:
+            test.book_index += runner_cnt * workload['distribution']['groups-per-runner']
+        else:
+            test.book_index += runner_cnt * pairs_per_cnt * per_opening
 
         if test.test_mode == 'DATAGEN':
             workload['test']['genfens_seeds'] = [
@@ -408,8 +412,15 @@ def game_distribution(test, machine):
     # SPSA is treated specially, if we are distributing many parameter sets at once
     is_multiple_spsa = test.test_mode == 'SPSA' and test.spsa_run.distribution_type == 'MULTIPLE'
 
-    return {
+    distribution = {
         'runner-count'      : spsa_count if is_multiple_spsa else worker_sockets,
         'concurrency-per'   : 2 if is_multiple_spsa else max_concurrency,
         'rounds-per-runner' : 2 * test.workload_size * (1 if is_multiple_spsa else max_concurrency),
     }
+
+    # FFA (every SPRT and GAMES test here): each concurrent game slot plays workload_size groups of
+    # 4 games. Only one of a game's 4 engines searches at a time, so a slot needs one thread
+    if test.test_mode in ('SPRT', 'GAMES'):
+        distribution['groups-per-runner'] = test.workload_size * max_concurrency
+
+    return distribution

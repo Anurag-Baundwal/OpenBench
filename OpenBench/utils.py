@@ -41,8 +41,9 @@ from OpenSite.settings import MEDIA_ROOT, PROJECT_PATH
 
 from OpenBench.config import OPENBENCH_CONFIG, PRESET_TYPES, verify_engine_presets
 from OpenBench.models import *
-from OpenBench.stats import TrinomialSPRT, PentanomialSPRT
+from OpenBench.stats import TrinomialSPRT, PentanomialSPRT, FfaSPRT, FFA_MIN_GROUPS
 
+import OpenBench.local_source
 import OpenBench.views
 import OpenBench.model_utils
 
@@ -524,9 +525,14 @@ def book_delete(request, book):
 
 def engine_verify(request, name):
 
-    # Sources are Github repos, which is where the Client clones the Engine from
-    if not request.POST['source'].startswith('https://github.com/'):
-        return 'Sources must start with https://github.com/'
+    # Sources are Github repos, which is where the Client clones the Engine from, or git repositories
+    # on this machine ("local:<path>"), which the Server hands out itself (OpenBench.local_source)
+    source = request.POST['source']
+    if OpenBench.local_source.is_local(source):
+        if not os.path.isdir(os.path.join(OpenBench.local_source.repo_path(source), '.git')):
+            return 'Local sources must be git repositories: local:<path>'
+    elif not source.startswith('https://github.com/'):
+        return 'Sources must start with https://github.com/ or local:'
 
     try: assert int(request.POST['nps']) > 0
     except: return 'NPS must be a positive integer'
@@ -626,6 +632,16 @@ def update_test(request, machine):
     # Pentanomial Implementation
     LL, LD, DD, DW, WW = map(int, request.POST['pentanomial'].split())
 
+    # FFA: "groups sum sumsq p1 p2 p3 p4" (see Test). The Trinomial is then the pairwise placement
+    # results, 12 per group, while a group is 4 games
+    ffa = request.POST.get('ffa', '').split()
+    if ffa:
+        ffa_groups, ffa_sum, ffa_sumsq = int(ffa[0]), float(ffa[1]), float(ffa[2])
+        ffa_places = [int(x) for x in ffa[3:7]]
+        games      = 4 * ffa_groups
+    else:
+        ffa_groups, ffa_sum, ffa_sumsq, ffa_places = 0, 0.0, 0.0, [0, 0, 0, 0]
+
     # SPSA Delta update vector; might not have this
     raw_spsa_delta = request.POST.get('spsa_delta', '')
     spsa_delta     = json.loads(raw_spsa_delta) if raw_spsa_delta else []
@@ -656,10 +672,39 @@ def update_test(request, machine):
         test.WW     += WW
         test.games  += games  # Overall
 
+        test.ffa_groups += ffa_groups # FFA
+        test.ffa_sum    += ffa_sum
+        test.ffa_sumsq  += ffa_sumsq
+        test.ffa_p1     += ffa_places[0]
+        test.ffa_p2     += ffa_places[1]
+        test.ffa_p3     += ffa_places[2]
+        test.ffa_p4     += ffa_places[3]
+
         # Consider only Crashes or Illegal moves as real errors
         test.error = bool(test.error or crashes or illegals)
 
-        if test.test_mode == 'SPRT':
+        if ffa and test.test_mode == 'SPRT':
+
+            # Group-score GSPRT, with no verdict before FFA_MIN_GROUPS groups
+            test.currentllr = FfaSPRT(test.ffa_groups, test.ffa_sum, test.ffa_sumsq, test.elolower, test.eloupper)
+            decided         = test.ffa_groups >= FFA_MIN_GROUPS
+            test.passed     = decided and test.currentllr > test.upperllr
+            test.failed     = decided and test.currentllr < test.lowerllr
+            test.finished   = test.passed or test.failed
+
+            # Stop at the Max Games cap, if one was set, without a verdict
+            if test.max_games > 0 and test.games >= test.max_games:
+                test.finished = True
+
+        elif ffa and test.test_mode == 'GAMES':
+
+            # Passed when Dev scored at least half of the pairwise placements
+            done          = test.games >= test.max_games
+            test.passed   = done and test.ffa_sum >= 0.5 * test.ffa_groups
+            test.failed   = done and test.ffa_sum <  0.5 * test.ffa_groups
+            test.finished = test.passed or test.failed
+
+        elif test.test_mode == 'SPRT':
 
             # Compute a new LLR for the updated results ( Penta )
             if test.use_penta:
@@ -719,6 +764,13 @@ def update_test(request, machine):
             WW       = F('WW'      ) + WW,
             crashes  = F('crashes' ) + crashes,
             timeloss = F('timeloss') + timelosses,
+            ffa_groups = F('ffa_groups') + ffa_groups,
+            ffa_sum    = F('ffa_sum'   ) + ffa_sum,
+            ffa_sumsq  = F('ffa_sumsq' ) + ffa_sumsq,
+            ffa_p1     = F('ffa_p1'    ) + ffa_places[0],
+            ffa_p2     = F('ffa_p2'    ) + ffa_places[1],
+            ffa_p3     = F('ffa_p3'    ) + ffa_places[2],
+            ffa_p4     = F('ffa_p4'    ) + ffa_places[3],
             updated  = timezone.now()
         )
 

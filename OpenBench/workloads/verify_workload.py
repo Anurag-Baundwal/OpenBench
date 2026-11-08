@@ -40,6 +40,7 @@ import requests
 import traceback
 
 import OpenBench.config
+import OpenBench.local_source
 import OpenBench.utils
 
 from OpenBench.models import *
@@ -87,6 +88,7 @@ def verify_test_creation(errors, request):
         (verify_options        , 'base_options', 'Hash', 'Base Options'),
         (verify_time_control   , 'base_time_control', 'Base Time Control'),
         (verify_same_kind_of_tc, 'dev_time_control', 'base_time_control'),
+        (verify_ffa_same_tc    , 'dev_time_control', 'base_time_control'),
 
         # Verify everything about the Test Settings
         (verify_book           , 'book_name', 'Book'),
@@ -277,6 +279,12 @@ def verify_same_kind_of_tc(errors, request, dev_field, base_field):
             errors.append('Dev and Base must use the same kind of Time Control with the 4pc_arena match runner')
     except: pass # Unparsable time controls are reported by verify_time_control()
 
+def verify_ffa_same_tc(errors, request, dev_field, base_field):
+
+    # FFA tests use the engine repo's ffa_match.py, which plays every seat at one time control
+    try: assert request.POST[dev_field] == request.POST[base_field]
+    except: errors.append('FFA tests need the same Time Control for Dev and Base')
+
 def verify_win_adj(errors, request, field):
     try:
         if (content := request.POST[field]) == 'None': return
@@ -290,6 +298,11 @@ def verify_draw_adj(errors, request, field):
     except: errors.append('Invalid Draw Adjudication Setting. Try "None"?')
 
 def verify_github_repo(errors, request, field):
+
+    # Local sources are checked against the Engine's source in collect_local_info()
+    if OpenBench.local_source.is_local(request.POST.get(field, '')):
+        return
+
     pattern = r'^https:\/\/github\.com\/[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+\/?$'
     try: assert re.match(pattern, request.POST[field])
     except: errors.append('Sources must be found on https://github.com/<User>/<Repo>')
@@ -462,6 +475,11 @@ def collect_github_info(errors, request, field):
     branch = request.POST['{0}_branch'.format(field)]
     bysha  = bool(re.search('^[0-9a-fA-F]{40}$', branch))
 
+    # Engines kept in a git repository on this machine are resolved with git, not Github
+    config = EngineConfig.objects.filter(name=request.POST['%s_engine' % (field)]).first()
+    if config and OpenBench.local_source.is_local(config.source):
+        return collect_local_info(errors, request, field, config, branch)
+
     # All API requests will share this common path. Some engines are private.
     base    = request.POST['%s_repo' % (field)].replace('github.com', 'api.github.com/repos')
     engine  = request.POST['%s_engine' % (field)]
@@ -520,6 +538,28 @@ def collect_github_info(errors, request, field):
     info = request.POST.get('info', '')
     source = OpenBench.utils.path_join(base, 'zipball', data['sha'])
     return (source, branch, data['sha'], bench, info)
+
+def collect_local_info(errors, request, field, config, branch):
+
+    # The repo field must name the Engine's own local source; nothing else is reachable
+    if request.POST['%s_repo' % (field)].rstrip('/') != config.source.rstrip('/'):
+        errors.append('%s must use the Engine\'s source, %s' % (field.capitalize(), config.source))
+        return
+
+    try:
+        sha, message = OpenBench.local_source.resolve(config.source, branch)
+    except Exception:
+        traceback.print_exc()
+        errors.append('%s could not be found' % (branch or 'Branch'))
+        return
+
+    if not (bench := determine_bench(request, field, message)):
+        errors.append('Unable to parse a Bench for %s' % (branch))
+        return
+
+    info   = request.POST.get('info', '')
+    source = OpenBench.local_source.download_path(config.name, sha)
+    return (source, branch, sha, bench, info)
 
 def requests_illegal_fork(request, field):
 

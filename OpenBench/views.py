@@ -25,6 +25,7 @@ import django.shortcuts
 import django.contrib.auth
 
 import OpenBench.config
+import OpenBench.local_source
 import OpenBench.model_utils
 import OpenBench.spsa_utils
 import OpenBench.utils
@@ -799,6 +800,26 @@ def client_get_network(request, engine, name):
 
     # Return the requested Neural Network file for the Client
     return networks(request, engine, 'DOWNLOAD', name, client=True)
+
+def client_get_source(request, engine, sha):
+
+    # A commit of an Engine kept in a git repository on this machine (OpenBench.local_source), as a
+    # zip. Private Engines need the token from Config/credentials.<engine>, sent as Github's header
+    config = EngineConfig.objects.filter(name=engine).first()
+    if not config or not OpenBench.local_source.is_local(config.source):
+        return HttpResponse('Unknown Engine', status=404)
+
+    if config.private:
+        expected = OpenBench.utils.read_git_credentials(engine)
+        if not expected or request.headers.get('Authorization') != expected['Authorization']:
+            return HttpResponse('Bad Credentials', status=401)
+
+    try: data = OpenBench.local_source.archive(config.source, sha)
+    except Exception: return HttpResponse('Unknown Commit', status=404)
+
+    response = HttpResponse(data, content_type='application/zip')
+    response['Content-Disposition'] = 'attachment; filename="%s-%s.zip"' % (engine, sha[:8])
+    return response
 
 @csrf_exempt
 @verify_worker

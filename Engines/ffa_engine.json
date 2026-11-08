@@ -1,0 +1,40 @@
+{
+    "private" : true,
+    "nps"     : 800000,
+    "source"  : "local:C:/Users/dell3/source/repos7/4pc-ffa-engine",
+
+    "build" : {
+        "path"      : "",
+        "compilers" : ["g++"],
+        "cpuflags"  : [],
+        "systems"   : ["Windows", "Linux", "Android"]
+    },
+
+    "test_presets" : {
+        "default" : {
+            "base_branch"       : "master",
+            "both_options"      : "Threads=1 Hash=16",
+            "both_time_control" : "4.0+0.04",
+            "test_bounds"       : "[0.00, 10.00]",
+            "test_confidence"   : "[0.05, 0.05]",
+            "book_name"         : "ffa_human_ply8.txt",
+            "workload_size"     : "4"
+        }
+    },
+
+    "tune_presets" : {
+        "default" : {
+            "both_options"      : "Threads=1 Hash=16",
+            "both_time_control" : "4.0+0.04",
+            "book_name"         : "ffa_human_ply8.txt"
+        }
+    },
+
+    "datagen_presets" : {
+        "default" : {
+            "both_options"      : "Threads=1 Hash=16",
+            "both_time_control" : "N=5000",
+            "book_name"         : "ffa_human_ply8.txt"
+        }
+    }
+}

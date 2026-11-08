@@ -52,6 +52,10 @@ def twoDigitPrecision(value):
 
 def gitDiffLink(test):
 
+    # Engines served from a local git repository have no web page to compare commits on
+    if test.dev.source.startswith('/clientGetSource/'):
+        return '#'
+
     repo = OpenBench.utils.path_join(*test.dev.source.split('/')[:-2])
     repo = repo.replace('://api.github.com', '://github.com').replace('/repos/', '/')
 
@@ -61,7 +65,37 @@ def gitDiffLink(test):
     return OpenBench.utils.path_join(repo, 'compare',
         '{0}..{1}'.format(test.base.sha[:8], test.dev.sha[:8]))
 
+## FFA: this instance only plays 4-player free-for-all, so SPRT and GAMES tests are FFA tests.
+## Results are groups of 4 games scored by pairwise placement (see OpenBench.stats.FfaSPRT)
+
+def ffaElo(test):
+    return OpenBench.stats.FfaElo(test.ffa_groups, test.ffa_sum, test.ffa_sumsq)
+
+def ffaPlaces(test):
+    places = (test.ffa_p1, test.ffa_p2, test.ffa_p3, test.ffa_p4)
+    total  = max(1, sum(places))
+    return '/'.join('%d' % (round(100 * x / total)) for x in places) + '%'
+
+def ffaLines(test):
+
+    # Lines shared by the Test pages and the Workers' output
+    lower, elo, upper = ffaElo(test)
+    score = test.ffa_sum / test.ffa_groups if test.ffa_groups else 0.5
+    return {
+        'elo'    : 'Elo: %0.2f +- %0.2f (95%%) [%0.2f, %0.2f]' % (elo, max(upper - elo, elo - lower), lower, upper),
+        'games'  : 'Groups: %d Games: %d Score: %0.4f' % (test.ffa_groups, test.games, score),
+        'pairs'  : 'Pairs W: %d L: %d D: %d' % (test.wins, test.losses, test.draws),
+        'places' : 'Dev places 1st/2nd/3rd/4th: %s' % (ffaPlaces(test)),
+        'llr'    : 'LLR: %0.2f (%0.2f, %0.2f) [%0.2f, %0.2f]' % (
+            test.currentllr, test.lowerllr, test.upperllr, test.elolower, test.eloupper),
+    }
+
 def shortStatBlock(test):
+
+    if test.test_mode in ('SPRT', 'GAMES'):
+        lines = ffaLines(test)
+        first = lines['llr'] if test.test_mode == 'SPRT' else lines['elo']
+        return '\n'.join([first, lines['games'], lines['pairs'], lines['places']])
 
     tri_line   = 'Games: %d W: %d L: %d D: %d' % test.as_nwld()
     penta_line = 'Ptnml(0-2): %d, %d, %d, %d, %d' % test.as_penta()
@@ -99,6 +133,23 @@ def longStatBlock(test):
     hashmb      = int(OpenBench.utils.extract_option(test.dev_options, 'Hash'))
     timecontrol = test.dev_time_control + ['s', '']['=' in test.dev_time_control]
     type_text   = 'SPRT' if test.test_mode == 'SPRT' else 'Conf'
+
+    if test.test_mode in ('SPRT', 'GAMES'):
+        lower, elo, upper = ffaElo(test)
+        score = test.ffa_sum / test.ffa_groups if test.ffa_groups else 0.5
+        lines = [
+            'Elo   | %0.2f +- %0.2f (95%%) [%0.2f, %0.2f]' % (elo, max(upper - elo, elo - lower), lower, upper),
+            '%-5s | %s Threads=%d Hash=%dMB, FFA 1v3' % (type_text, timecontrol, threads, hashmb),
+        ]
+        if test.test_mode == 'SPRT':
+            lines.append('LLR   | %0.2f (%0.2f, %0.2f) [%0.2f, %0.2f]' % (
+                test.currentllr, test.lowerllr, test.upperllr, test.elolower, test.eloupper))
+        lines += [
+            'Games | N: %d Groups: %d Score: %0.4f' % (test.games, test.ffa_groups, score),
+            'Pairs | W: %d L: %d D: %d' % (test.wins, test.losses, test.draws),
+            'Place | 1st/2nd/3rd/4th: %s' % (ffaPlaces(test)),
+        ]
+        return '\n'.join(lines)
 
     lower, elo, upper   = OpenBench.stats.Elo(test.results())
     nelo, nelo_error, _ = fastchessStats(test.results())
@@ -157,6 +208,16 @@ def workerStatBlock(test):
     #   LLR: -0.01 (-0.4%) (-2.94, 2.94) [0.00, 3.00]
 
     assert test.test_mode != 'SPSA'
+
+    if test.test_mode in ('SPRT', 'GAMES'):
+        lines = ffaLines(test)
+        out   = [lines['elo'], lines['games'], lines['pairs'], lines['places']]
+        if test.test_mode == 'SPRT':
+            llr      = test.currentllr
+            progress = llr / test.upperllr if llr >= 0 else -llr / test.lowerllr
+            out.append('LLR: %.2f (%.1f%%) (%.2f, %.2f) [%.2f, %.2f]' % (
+                llr, 100 * progress, test.lowerllr, test.upperllr, test.elolower, test.eloupper))
+        return '\n'.join(out)
 
     results = test.results()
     penta   = len(results) == 5

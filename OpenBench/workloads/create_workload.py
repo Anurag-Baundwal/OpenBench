@@ -35,6 +35,7 @@ import requests
 
 from django.db import transaction
 
+import OpenBench.local_source
 import OpenBench.model_utils
 import OpenBench.spsa_utils
 import OpenBench.utils
@@ -314,6 +315,11 @@ def branch_is_out_of_date(workload):
     # Cannot compare across engines
     if workload.dev_engine != workload.base_engine:
         return False
+
+    # Engines in a local git repository are compared with git
+    if OpenBench.local_source.is_local(workload.dev_repo):
+        try: return OpenBench.local_source.is_behind(workload.dev_repo, workload.dev.sha, workload.base.sha)
+        except Exception: return False
 
     # Format the request to the Github endpoint
     base = 'https://api.github.com/repos/'
