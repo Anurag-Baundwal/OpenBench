@@ -17,7 +17,7 @@
             "both_time_control" : "4.0+0.04",
             "test_bounds"       : "[0.00, 10.00]",
             "test_confidence"   : "[0.05, 0.05]",
-            "book_name"         : "ffa_human_ply8.txt",
+            "book_name"         : "ffa_human2000_ply8.txt",
             "workload_size"     : "4"
         }
     },
@@ -26,7 +26,7 @@
         "default" : {
             "both_options"      : "Threads=1 Hash=16",
             "both_time_control" : "4.0+0.04",
-            "book_name"         : "ffa_human_ply8.txt"
+            "book_name"         : "ffa_human2000_ply8.txt"
         }
     },
 
@@ -34,7 +34,7 @@
         "default" : {
             "both_options"      : "Threads=1 Hash=16",
             "both_time_control" : "N=5000",
-            "book_name"         : "ffa_human_ply8.txt"
+            "book_name"         : "ffa_human2000_ply8.txt"
         }
     }
 }

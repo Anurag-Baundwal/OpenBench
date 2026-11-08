@@ -20,7 +20,8 @@ Create Test: engine ffa_engine, source local:C:/Users/dell3/source/repos7/4pc-ff
 - A/B of an option on the same commit: same branch for both, and the option in Dev Options only,
   e.g. "Threads=1 Hash=16 EvalMobility=100".
 - Dev and Base must use the same time control. Default 4.0+0.04, bounds [0, 10], book
-  ffa_human_ply8.txt, 1v3 seating (Dev in every seat once per group of 4 games).
+  ffa_human2000_ply8.txt (31750 quiet openings from games averaging 2000+; the older
+  ffa_human_ply8.txt has no rating filter), 1v3 seating (Dev in every seat once per group of 4 games).
 - Statistics are those of tools/ffa_match.py: one sample per group (pairwise placement score),
   GSPRT with the normal approximation, no verdict before 20 groups. "Pairs" are Dev-seat vs
   Base-seat placements; "places" are Dev's finishing places.
