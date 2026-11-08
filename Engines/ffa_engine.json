@@ -1,6 +1,6 @@
 {
     "private" : true,
-    "nps"     : 800000,
+    "nps"     : 440000,
     "source"  : "local:C:/Users/dell3/source/repos7/4pc-ffa-engine",
 
     "build" : {
