@@ -9,6 +9,8 @@
     "balance_engine_throughputs"  : false,
     "random_workload_assignment"  : true,
 
+    "default_engine" : "stockfish_4pc",
+
     "use_x_accel_redirect"  : false,
     "x_accel_redirect_root" : "/x-accel-media/"
 }

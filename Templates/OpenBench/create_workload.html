@@ -16,8 +16,11 @@
         document.addEventListener(
             'DOMContentLoaded', function () {
                 // Without a default Engine in the Profile, or with one that is not
-                // enabled, start from the first Engine, so its presets still apply
+                // enabled, start from the Config's default Engine, and failing that
+                // from the first Engine, so its presets still apply
                 var engine = '{{ profile.engine }}';
+                if (!engines.hasOwnProperty(engine))
+                    engine = config.default_engine;
                 if (!engines.hasOwnProperty(engine))
                     engine = document.getElementById('dev_engine').value;
                 change_engine(engine, 'dev', '{{workload}}');

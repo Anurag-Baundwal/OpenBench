@@ -84,6 +84,10 @@ def verify_general_config(conf):
     assert type(conf.get('balance_engine_throughputs' ) == bool)
     assert type(conf.get('random_workload_assignment' )) == bool
 
+    # The Engine the Create pages start from, for Users without a default Engine in
+    # their Profile. Optional, and ignored unless it names an enabled Engine
+    assert type(conf.get('default_engine', '')) == str
+
     # Serving of Networks and PGNs may be handed off to an nginx reverse proxy.
     # The root must match an "internal" nginx location, aliased to Media/. ie:
     #     location /x-accel-media/ { internal; alias /path/to/OpenBench/Media/; }
