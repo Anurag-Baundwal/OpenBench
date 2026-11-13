@@ -46,7 +46,7 @@ The time control must be `N=` or `D=`.
 
 - **What a workload does:** it runs the engine's own `generate_training_data`, the training data generator of Stockfish's tools branch, with one game per thread and a seed of its own.
 - **When it ends:** workers report the games they finished, and the test ends at **Max Games**. A game writes about 100 positions, so 1,400,000 games is about 140M positions.
-- **Where the data goes:** it stays on each worker, in `Client/Datagen/<test id>/`, as NNUEDAT2 files compressed with xz, at about 10.5 bytes per position. Nothing is uploaded, since the server couldn't store it.
+- **Where the data goes:** it stays on each worker, in `Client/Datagen/<test id>/`, as NNUEDAT3 files compressed with xz, at about 11.5 bytes per position. NNUEDAT3 adds the castling rights, the en passant squares and rule 50 to the records of NNUEDAT2 (about 10.5 bytes per position), which tests of older engines write. Nothing is uploaded, since the server couldn't store it.
 - **Collecting it:** copy the `Datagen/` folders from every machine, then run `python Scripts/datagen_collect.py <folders...> --out data --validation 1000000` (it needs numpy). It:
   - unpacks the files into `data/train/` and `data/validation/`, for the trainer;
   - keeps each position only once;

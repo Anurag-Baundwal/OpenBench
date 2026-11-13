@@ -32,8 +32,9 @@
 #       count 204800 seed S output_file_name Datagen/<test>/<test>.<result>.<book index>
 #   quit
 #
-# The data stays on the Worker, in Datagen/<test>/, as NNUEDAT2 files compressed
-# with xz. They are collected by hand, and checked with Scripts/datagen_collect.py.
+# The data stays on the Worker, in Datagen/<test>/, as NNUEDAT2 or NNUEDAT3 files
+# compressed with xz. They are collected by hand, and checked with
+# Scripts/datagen_collect.py.
 #
 # run_datagen() may raise utils.OpenBenchFailedDatagenException, when the engine
 # exits without finishing. The data it wrote until then remains usable.
@@ -52,12 +53,13 @@ import time
 
 import utils
 
-# NNUEDAT2, as written by the engine's tools/sfen_stream.h. A 32 byte header,
-# holding the number of records, then the records of 188 bytes each
-HEADER      = struct.Struct('<8sQQQ')
-RECORD_SIZE = 188
-BIN_MAGIC   = b'NNUEDAT2'
-BIN_SCHEMA  = 0x4650434654303031
+# NNUEDAT2 and NNUEDAT3, as written by the engine's tools/sfen_stream.h. A 32 byte
+# header, holding the number of records, then the records of 188 or 196 bytes each.
+# NNUEDAT3 adds the castling rights, the en passant squares and rule 50 to each
+# record. Tests of older engines still write NNUEDAT2
+HEADER       = struct.Struct('<8sQQQ')
+RECORD_SIZES = { b'NNUEDAT2' : 188, b'NNUEDAT3' : 196 }
+BIN_SCHEMA   = 0x4650434654303031
 
 # Offsets in a record of the side to move, its team's result, and the game's id
 SIDE_OFFSET, RESULT_OFFSET, GAME_OFFSET = 160, 161, 172
@@ -153,8 +155,12 @@ def datagen_commands(config, book_path, output_name):
 
 def datagen_positions(path):
 
-    # The header is rewritten after every write, so the file is always complete
-    try: return max(0, os.path.getsize(path) - HEADER.size) // RECORD_SIZE
+    # The header is rewritten after every write, so the file is always complete.
+    # Its magic, which gives the size of the records, never changes
+    try:
+        with open(path, 'rb') as fin:
+            size = RECORD_SIZES.get(fin.read(8))
+        return max(0, os.path.getsize(path) - HEADER.size) // size if size else 0
     except OSError: return 0
 
 def run_datagen(engine, commands, data_path, heartbeat, report_interval):
@@ -206,8 +212,9 @@ def run_datagen(engine, commands, data_path, heartbeat, report_interval):
 
 def read_datagen_results(path):
 
-    # Returns the positions in an NNUEDAT2 file, and the [L, D, W] of its games for
-    # Red and Yellow. Each record holds the result for the team of the side to move
+    # Returns the positions in an NNUEDAT2 or NNUEDAT3 file, and the [L, D, W] of its
+    # games for Red and Yellow. Each record holds the result for the team of the side
+    # to move
 
     if not os.path.isfile(path):
         return 0, [0, 0, 0]
@@ -216,11 +223,12 @@ def read_datagen_results(path):
         magic, count, schema, checksum = HEADER.unpack(fin.read(HEADER.size))
         data = fin.read()
 
-    if magic != BIN_MAGIC or schema != BIN_SCHEMA or len(data) != count * RECORD_SIZE:
-        raise utils.OpenBenchFailedDatagenException('%s is not a complete NNUEDAT2 file' % (path), '')
+    size = RECORD_SIZES.get(magic)
+    if not size or schema != BIN_SCHEMA or len(data) != count * size:
+        raise utils.OpenBenchFailedDatagenException('%s is not a complete NNUEDAT2 or NNUEDAT3 file' % (path), '')
 
     results = {}
-    for offset in range(0, len(data), RECORD_SIZE):
+    for offset in range(0, len(data), size):
         game = struct.unpack_from('<Q', data, offset + GAME_OFFSET)[0]
         if game not in results:
             result = struct.unpack_from('<b', data, offset + RESULT_OFFSET)[0]
@@ -234,7 +242,7 @@ def read_datagen_results(path):
 
 def compress_datagen_file(path):
 
-    # xz stores NNUEDAT2 in about a tenth of its size. Written to a temporary
+    # xz stores the data in about a tenth of its size. Written to a temporary
     # file first, so that an interruption cannot leave a broken archive behind
     if not os.path.isfile(path):
         return

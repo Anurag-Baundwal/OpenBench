@@ -22,13 +22,13 @@
 
 # Prepares the training data of 4PC Datagen Workloads for the trainer.
 #
-# Workers keep their data in Client/Datagen/<test>/, as NNUEDAT2 files that are
-# usually compressed with xz. Given those files, or the folders holding them, this
-# unpacks them into <out>/train/ and <out>/validation/. A position that is in more
-# than one file, with the same pieces and side to move, is only kept once. The
-# engine already skips repeated positions within a Workload, so this only finds
-# those repeated between Workloads, and no position is in both of the splits.
-# The files are handled on all cores at once.
+# Workers keep their data in Client/Datagen/<test>/, as NNUEDAT2 or NNUEDAT3 files
+# that are usually compressed with xz. Given those files, or the folders holding
+# them, this unpacks them into <out>/train/ and <out>/validation/. A position that
+# is in more than one file, with the same pieces and side to move, is only kept
+# once. The engine already skips repeated positions within a Workload, so this
+# only finds those repeated between Workloads, and no position is in both of the
+# splits. Each file keeps its format. The files are handled on all cores at once.
 #
 #   python Scripts/datagen_collect.py Datagen/ --out data --validation 1000000
 #
@@ -44,11 +44,11 @@ from pathlib import Path
 
 import numpy as np
 
-# NNUEDAT2, as written by the engine's tools/sfen_stream.h
-HEADER      = struct.Struct('<8sQQQ')
-RECORD_SIZE = 188
-BIN_MAGIC   = b'NNUEDAT2'
-BIN_SCHEMA  = 0x4650434654303031
+# NNUEDAT2 and NNUEDAT3, as written by the engine's tools/sfen_stream.h. NNUEDAT3
+# adds the castling rights, the en passant squares and rule 50 to each record
+HEADER       = struct.Struct('<8sQQQ')
+RECORD_SIZES = { b'NNUEDAT2' : 188, b'NNUEDAT3' : 196 }
+BIN_SCHEMA   = 0x4650434654303031
 
 # The pieces and side to move, and the game id, of each record
 POSITION_SIZE, GAME_OFFSET = 161, 172
@@ -68,16 +68,21 @@ def read_file(path):
         raw = fin.read()
 
     magic, count, schema, checksum = HEADER.unpack_from(raw)
-    if magic != BIN_MAGIC or schema != BIN_SCHEMA or len(raw) != HEADER.size + count * RECORD_SIZE:
-        raise ValueError('%s is not a complete NNUEDAT2 file' % (path))
+    if magic not in RECORD_SIZES or schema != BIN_SCHEMA or len(raw) != HEADER.size + count * RECORD_SIZES[magic]:
+        raise ValueError('%s is not a complete NNUEDAT2 or NNUEDAT3 file' % (path))
 
     return raw
 
+def records_of(raw):
+
+    # The records of a file, one row of bytes each
+    return np.frombuffer(raw, dtype=np.uint8, offset=HEADER.size).reshape(-1, RECORD_SIZES[raw[:8]])
+
 def position_keys(raw):
 
-    # 64 bit hashes of the pieces and side to move of every record
-    count   = (len(raw) - HEADER.size) // RECORD_SIZE
-    records = np.frombuffer(raw, dtype=np.uint8, offset=HEADER.size).reshape(count, RECORD_SIZE)
+    # 64 bit hashes of the pieces and side to move of every record, the same in both formats
+    records = records_of(raw)
+    count   = len(records)
 
     padded = np.zeros((count, 168), dtype=np.uint8)
     padded[:, :POSITION_SIZE] = records[:, :POSITION_SIZE]
@@ -92,9 +97,8 @@ def position_keys(raw):
 
 def game_ids(raw):
 
-    # Records are 188 bytes, so the 8 bytes of each id are taken out before reading them
-    records = np.frombuffer(raw, dtype=np.uint8, offset=HEADER.size).reshape(-1, RECORD_SIZE)
-    return records[:, GAME_OFFSET:GAME_OFFSET + 8].copy().view('<u8').ravel()
+    # Records are 188 or 196 bytes, so the 8 bytes of each id are taken out before reading them
+    return records_of(raw)[:, GAME_OFFSET:GAME_OFFSET + 8].copy().view('<u8').ravel()
 
 def unpack(path, output):
 
@@ -111,13 +115,13 @@ def rewrite(output, mask):
 
     # Writes a file again with only the positions it keeps, or deletes it if none are left
     raw     = output.read_bytes()
-    records = np.frombuffer(raw, dtype=np.uint8, offset=HEADER.size).reshape(-1, RECORD_SIZE)[mask]
+    records = records_of(raw)[mask]
     if not len(records):
         output.unlink()
         return
 
     data = records.tobytes()
-    output.write_bytes(HEADER.pack(BIN_MAGIC, len(records), BIN_SCHEMA, fnv1a(data)) + data)
+    output.write_bytes(HEADER.pack(raw[:8], len(records), BIN_SCHEMA, fnv1a(data)) + data)
 
 def find_inputs(paths):
 
@@ -138,7 +142,7 @@ def find_inputs(paths):
 def main():
 
     p = argparse.ArgumentParser(description='Prepares the training data of 4PC Datagen Workloads')
-    p.add_argument('inputs'      , help='NNUEDAT2 files, or folders holding them', nargs='+'          )
+    p.add_argument('inputs'      , help='NNUEDAT2 or NNUEDAT3 files, or folders holding them', nargs='+')
     p.add_argument('--out'       , help='Folder for train/ and validation/'      , required=True      )
     p.add_argument('--validation', help='Positions for validation, from whole files', type=int, default=0)
     args = p.parse_args()
