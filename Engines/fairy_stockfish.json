@@ -1,0 +1,35 @@
+{
+    "private" : false,
+    "variant" : "duck",
+    "nps"     : 800000,
+    "source"  : "https://github.com/Anurag-Baundwal/Fairy-Stockfish",
+
+    "build" : {
+        "path"      : "src",
+        "compilers" : ["g++", "clang++"],
+        "cpuflags"  : [],
+        "systems"   : ["Windows", "Linux", "Darwin", "Android"]
+    },
+
+    "test_presets" : {
+        "default" : {
+            "base_branch"       : "openbench",
+            "both_options"      : "Threads=1 Hash=16",
+            "both_time_control" : "10.0+0.1",
+            "test_bounds"       : "[0.00, 3.00]",
+            "test_confidence"   : "[0.20, 0.05]",
+            "book_name"         : "Duck_DFRC.epd",
+            "win_adj"           : "movecount=8 score=800",
+            "draw_adj"          : "movenumber=32 movecount=10 score=0",
+            "workload_size"     : "32"
+        }
+    },
+
+    "tune_presets" : {
+        "default" : {}
+    },
+
+    "datagen_presets" : {
+        "default" : {}
+    }
+}
