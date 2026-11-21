@@ -1476,6 +1476,12 @@ def determine_scale_factor(config, dev_name, base_name):
         print ('\nScale Factor: 1 (FFA tests are not scaled)')
         return 1.0
 
+    # Variant tests too: the duck engine's speed will change a lot as features are added, and
+    # scaling against a fixed reference would stretch every test as master gets slower
+    if FastchessRunner.is_variant(config):
+        print ('\nScale Factor: 1 (variant tests are not scaled)')
+        return 1.0
+
     dev_factor = base_factor = None
 
     # Scaling is only done relative to the Dev Engine
