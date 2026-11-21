@@ -60,6 +60,10 @@ class EngineConfig(Model):
     # pairwise placement (Test.ffa_*). Teams engines play 2v2 games with pentanomial results
     ffa     = BooleanField(default=False)
 
+    # A 2-player chess variant, such as "duck", whose tests are played by fastchess as configured
+    # under "variants" in Config/config.json. Empty for 4PC engines, played by match.py
+    variant = CharField(max_length=32, blank=True, default='')
+
     # Space seperated lists, kept as strings for the sake of the edit forms
     build_path      = CharField(max_length=64, blank=True)
     build_compilers = CharField(max_length=64, blank=True)
@@ -272,6 +276,7 @@ class Test(Model):
     WW     = IntegerField(default=0) # Pentanomial
 
     ffa        = BooleanField(default=False) # Dev's EngineConfig.ffa when the test was created
+    variant    = CharField(max_length=32, blank=True, default='') # Dev's EngineConfig.variant, likewise
     # FFA: sum and sum of squares of the group scores, and Dev's places (see Result). For FFA tests the
     # Trinomial fields hold the pairwise placement results (Dev seat vs Base seat), and games = 4 x groups
     ffa_groups = IntegerField(default=0)

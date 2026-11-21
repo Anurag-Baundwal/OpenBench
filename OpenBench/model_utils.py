@@ -15,6 +15,7 @@ def engine_config_to_dict(config):
     return {
         'private' : config.private,
         'ffa'     : config.ffa,
+        'variant' : config.variant,
         'nps'     : config.nps,
         'source'  : config.source,
         'build'   : config.build(),

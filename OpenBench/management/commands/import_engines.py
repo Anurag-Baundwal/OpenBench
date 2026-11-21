@@ -31,6 +31,8 @@ import os
 
 from django.core.management.base import BaseCommand, CommandError
 
+import OpenBench.config
+
 from OpenBench.config import PRESET_TYPES, verify_engine_presets
 from OpenBench.models import EngineConfig
 
@@ -72,6 +74,12 @@ def engine_fields(fname, name, conf):
     if type(conf.get('ffa', False)) != bool:
         raise CommandError('%s: \"ffa\" must be a boolean' % (fname))
 
+    if type(conf.get('variant', '')) != str:
+        raise CommandError('%s: \"variant\" must be a string' % (fname))
+
+    if conf.get('variant') and conf['variant'] not in OpenBench.config.OPENBENCH_CONFIG['variants']:
+        raise CommandError('%s: variant "%s" is not in Config/config.json' % (fname, conf['variant']))
+
     # Missing preset types were previously filled in when the file was loaded
     presets = { x : conf.get(x) or { 'default' : {} } for x in PRESET_TYPES }
     for group in presets.values():
@@ -85,6 +93,7 @@ def engine_fields(fname, name, conf):
     return {
         'private'         : conf['private'],
         'ffa'             : conf.get('ffa', False),
+        'variant'         : conf.get('variant', ''),
         'nps'             : conf['nps'],
         'source'          : conf['source'],
         'build_path'      : build.get('path', ''),

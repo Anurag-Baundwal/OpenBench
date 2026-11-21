@@ -235,6 +235,10 @@ function change_engine(engine, target, workload_type) {
     set_option('scale_nps', engines[engine].nps);
     set_option('scale_method', workload_type == 'TUNE' ? 'DEV' : 'BASE');
 
+    // No adjudication, unless the presets set it (only 2-player variant engines do)
+    set_option('win_adj', 'None');
+    set_option('draw_adj', 'None');
+
     apply_preset('STC', workload_type);
 }
 

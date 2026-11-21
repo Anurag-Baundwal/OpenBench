@@ -139,6 +139,7 @@ def create_new_test(request):
     test.dev_engine        = request.POST['dev_engine']
     test.dev_options       = request.POST['dev_options']
     test.ffa               = EngineConfig.objects.get(name=request.POST['dev_engine']).ffa
+    test.variant           = EngineConfig.objects.get(name=request.POST['dev_engine']).variant
     test.dev_network       = request.POST['dev_network']
     test.dev_time_control  = OpenBench.utils.TimeControl.parse(request.POST['dev_time_control'])
 

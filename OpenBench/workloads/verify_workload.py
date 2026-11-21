@@ -55,6 +55,10 @@ def verify_workload(request, workload_type):
     if workload_type != 'TEST' and is_ffa_engine(request.POST.get('dev_engine', '')):
         errors.append('FFA engines support SPRT and GAMES tests only')
 
+    # Datagen runs the engine's generate_training_data, which only the 4PC engines have
+    if workload_type == 'DATAGEN' and engine_variant(request.POST.get('dev_engine', '')):
+        errors.append('Engines of a 2-player variant support Tests and Tunes only')
+
     if workload_type == 'TEST':
         verify_test_creation(errors, request)
         dev  = collect_github_info(errors, request, 'dev')
@@ -93,6 +97,7 @@ def verify_test_creation(errors, request):
         (verify_time_control   , 'base_time_control', 'Base Time Control'),
         (verify_same_kind_of_tc, 'dev_time_control', 'base_time_control'),
         (verify_ffa_same_tc    , 'dev_time_control', 'base_time_control'),
+        (verify_same_variant   , 'dev_engine', 'base_engine'),
 
         # Verify everything about the Test Settings
         (verify_book           , 'book_name', 'Book'),
@@ -299,6 +304,18 @@ def verify_ffa_same_tc(errors, request, dev_field, base_field):
     # FFA tests use the engine repo's ffa_match.py, which plays every seat at one time control
     if dev_ffa and request.POST[dev_field] != request.POST[base_field]:
         errors.append('FFA tests need the same Time Control for Dev and Base')
+
+def engine_variant(name):
+    config = EngineConfig.objects.filter(name=name).first()
+    return config.variant if config else ''
+
+def verify_same_variant(errors, request, dev_field, base_field):
+
+    # A test is played by one runner: match.py for 4PC engines, or the variant's fastchess
+    dev_variant  = engine_variant(request.POST.get(dev_field, ''))
+    base_variant = engine_variant(request.POST.get(base_field, ''))
+    if dev_variant != base_variant:
+        errors.append('Dev and Base must be engines of the same variant')
 
 def verify_win_adj(errors, request, field):
     try:

@@ -23,7 +23,7 @@ import os
 
 from OpenSite.settings import PROJECT_PATH
 
-OPENBENCH_STATIC_VERSION = 'v18'
+OPENBENCH_STATIC_VERSION = 'v19'
 
 OPENBENCH_CONFIG = None # Initialized by OpenBench/apps.py
 
@@ -91,6 +91,12 @@ def verify_general_config(conf):
     # Serving of Networks and PGNs may be handed off to an nginx reverse proxy.
     # The root must match an "internal" nginx location, aliased to Media/. ie:
     #     location /x-accel-media/ { internal; alias /path/to/OpenBench/Media/; }
+
+    # 2-player variants, by the name an Engine gives as "variant", each with the runner that
+    # plays its tests: { "duck" : { "runner" : { "name", "repo", "ref", "variant", "variant_960" } } }
+    assert type(conf.setdefault('variants', {})) == dict
+    for variant in conf['variants'].values():
+        assert set(variant['runner'].keys()) == { 'name', 'repo', 'ref', 'variant', 'variant_960' }
 
     assert type(conf.get('use_x_accel_redirect' )) == bool
     assert type(conf.get('x_accel_redirect_root')) == str

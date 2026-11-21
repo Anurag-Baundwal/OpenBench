@@ -270,11 +270,12 @@
                 </div>
 
                 <!-- Syzygy and adjudication do not apply to 4PC; the match runner adjudicates on its own.
-                     No ids, so that Engine presets can never change these fixed values -->
+                     No ids, so that Engine presets can never change these fixed values. The exception:
+                     presets of 2-player variant engines set the adjudication fastchess plays with -->
                 <input type="hidden" name="syzygy_wdl" value="DISABLED">
                 <input type="hidden" name="syzygy_adj" value="DISABLED">
-                <input type="hidden" name="win_adj" value="None">
-                <input type="hidden" name="draw_adj" value="None">
+                <input type="hidden" id="win_adj" name="win_adj" value="None">
+                <input type="hidden" id="draw_adj" name="draw_adj" value="None">
 
                 <h3> Scaling Settings </h3>
                 <div class="row">

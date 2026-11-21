@@ -11,6 +11,18 @@
 
     "default_engine" : "stockfish_4pc",
 
+    "variants" : {
+        "duck" : {
+            "runner" : {
+                "name"        : "fastchess",
+                "repo"        : "https://github.com/Silverrzz/fastchess",
+                "ref"         : "cfa3671a44884024f8f5f850ab38197748432def",
+                "variant"     : "duck",
+                "variant_960" : "duck960"
+            }
+        }
+    },
+
     "use_x_accel_redirect"  : false,
     "x_accel_redirect_root" : "/x-accel-media/"
 }

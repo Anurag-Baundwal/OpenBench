@@ -301,7 +301,12 @@ def workload_to_dictionary(test, result, machine):
         'play_reverses' : test.play_reverses,
         'scale_method'  : test.scale_method,
         'scale_nps'     : test.scale_nps,
+        'variant'       : test.variant,
     }
+
+    # Variant tests are played by the runner in Config/config.json, ie a pinned fastchess
+    if test.variant:
+        workload['runner'] = OPENBENCH_CONFIG['variants'][test.variant]['runner']
 
     # Book could have been deleted after this workload was created
     book = Book.objects.filter(name=test.book_name).first()
