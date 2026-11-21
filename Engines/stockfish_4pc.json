@@ -19,6 +19,34 @@
             "test_confidence"   : "[0.20, 0.05]",
             "book_name"         : "fens_100k.txt",
             "workload_size"     : "8"
+        },
+
+        "STC" : {
+            "both_options"      : "Threads=1 Hash=16",
+            "both_time_control" : "10.0+0.1",
+            "test_bounds"       : "[0.00, 3.00]",
+            "workload_size"     : "8"
+        },
+
+        "LTC" : {
+            "both_options"      : "Threads=1 Hash=64",
+            "both_time_control" : "60.0+0.6",
+            "test_bounds"       : "[0.00, 3.00]",
+            "workload_size"     : "8"
+        },
+
+        "STC non-regression" : {
+            "both_options"      : "Threads=1 Hash=16",
+            "both_time_control" : "10.0+0.1",
+            "test_bounds"       : "[-3.00, 0.00]",
+            "workload_size"     : "8"
+        },
+
+        "LTC non-regression" : {
+            "both_options"      : "Threads=1 Hash=64",
+            "both_time_control" : "60.0+0.6",
+            "test_bounds"       : "[-3.00, 0.00]",
+            "workload_size"     : "8"
         }
     },
 
