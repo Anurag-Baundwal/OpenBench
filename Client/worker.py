@@ -34,11 +34,14 @@ import queue
 import re
 import requests
 import shlex
+import shutil
 import sys
+import tempfile
 import threading
 import time
 import traceback
 import uuid
+import zipfile
 
 from subprocess import PIPE, Popen, call, STDOUT
 from concurrent.futures import ThreadPoolExecutor
@@ -58,7 +61,7 @@ from client import try_forever
 
 ## Basic configuration of the Client. These timeouts can be changed at will
 
-CLIENT_VERSION   = 69 # Client version to send to the Server
+CLIENT_VERSION   = 70 # Client version to send to the Server
 TIMEOUT_HTTP     = 30 # Timeout in seconds for HTTP requests
 TIMEOUT_ERROR    = 60 # Timeout in seconds when any errors are thrown
 TIMEOUT_WORKLOAD = 60 # Timeout in seconds between workload requests
@@ -157,7 +160,7 @@ class Configuration:
         os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
         # Ensure the folder structure for ease of coding
-        for folder in ['PGNs', 'Engines', 'Networks', 'Books', 'Datagen']:
+        for folder in ['PGNs', 'Engines', 'Networks', 'Books', 'Datagen', 'Runners']:
             if not os.path.isdir(folder):
                 os.mkdir(folder)
 
@@ -859,6 +862,281 @@ def run_and_parse_ffa_runner(config, command, runner_idx, results_queue, abort_f
     message = 'FFA match runner failed, exit code %d' % (runner.returncode)
     raise utils.OpenBenchMatchRunnerFailedException(message, '\n'.join(output))
 
+class FastchessRunner:
+
+    ## Tests of 2-player variant engines (the Workload's test.variant), such as duck chess. They are
+    ## played by the fastchess named in the Workload's 'runner': a pinned commit of a fork that knows
+    ## the variant, ie Silverrzz/fastchess. It is built once per commit, into Runners/
+
+    # Fastchess, ie "Finished game 3 (duck-dev vs duck-base): 1-0 {White wins by king capture}"
+    FINISHED_GAME = re.compile(r'^Finished game (\d+) \((.+) vs (.+)\): (1-0|0-1|1/2-1/2) \{(.*)\}$')
+
+    # Fastchess's own progress and running totals, which cover only this Workload's games
+    QUIET_LINE = re.compile(r'^(Started game|Results of|Elo:|LOS:|Games:|Ptnml|WL/DD|--------|'
+        r'Indexing opening suite|Finished match|Total Time|Saved results|Started tournament)')
+
+    @staticmethod
+    def is_variant(config):
+        return bool(config.workload['test'].get('variant'))
+
+    @staticmethod
+    def binary(config):
+        runner = config.workload['runner']
+        folder = '%s-%s' % (runner['name'], runner['ref'][:12])
+        return os.path.join('Runners', folder, runner['name'] + ('.exe' if IS_WINDOWS else ''))
+
+    @staticmethod
+    def build(config):
+
+        # Each commit of the runner is built once, and kept
+        binary = FastchessRunner.binary(config)
+        if os.path.isfile(binary):
+            return binary
+
+        runner = config.workload['runner']
+        url    = '%s/archive/%s.zip' % (runner['repo'].rstrip('/'), runner['ref'])
+        print('\nBuilding %s from %s at %s...' % (runner['name'], runner['repo'], runner['ref'][:12]))
+
+        response = requests.get(url, timeout=TIMEOUT_HTTP)
+        if response.status_code != 200:
+            raise utils.OpenBenchBuildFailedException(
+                '%s download failed' % (runner['name']), 'HTTP %d from %s' % (response.status_code, url))
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+
+            zip_path = os.path.join(temp_dir, 'runner.zip')
+            with open(zip_path, 'wb') as fout:
+                fout.write(response.content)
+
+            # GitHub's archives hold one folder, named after the repository and commit
+            with zipfile.ZipFile(zip_path) as archive:
+                archive.extractall(os.path.join(temp_dir, 'src'))
+            src_dir = os.path.join(temp_dir, 'src', os.listdir(os.path.join(temp_dir, 'src'))[0])
+
+            # Build with as many jobs as the Worker may use for games, and our C++ compiler
+            command = ['make', '-j%d' % (config.threads), 'CXX=%s' % (config.cxx_comp)]
+            process = Popen(command, cwd=src_dir, stdout=PIPE, stderr=STDOUT)
+            output  = process.communicate()[0].decode('utf-8', errors='replace')
+            built   = os.path.join(src_dir, os.path.basename(binary))
+
+            if process.returncode or not os.path.isfile(built):
+                print('Failed to build %s\n\nCompiler Output:' % (runner['name']))
+                for line in output.split('\n'):
+                    print('> %s' % (line))
+                raise utils.OpenBenchBuildFailedException('%s build failed' % (runner['name']), output)
+
+            os.makedirs(os.path.dirname(binary), exist_ok=True)
+            shutil.move(built, binary)
+
+        print('Built %s' % (binary))
+        return binary
+
+    @staticmethod
+    def engine_name(config, branch):
+        # Unique, even in self-play, and shown in the PGNs, ie "duckchess_stockfish-dev"
+        return '%s-%s' % (config.workload['test'][branch]['engine'], branch)
+
+    @staticmethod
+    def time_control(config, scale_factor, branch):
+
+        # The kind of limit was checked by the Server: nodes, depth, movetime, or a clock
+        control = config.workload['test'][branch]['time_control'].upper()
+
+        if (match := re.search(r'(N|D)=(\d+)', control)):
+            return ['tc=inf', '%s=%s' % ({ 'N' : 'nodes', 'D' : 'depth' }[match.group(1)], match.group(2))]
+
+        if (match := re.search(r'MT=(\d+)', control)):
+            return ['st=%.3f' % (float(match.group(1)) * scale_factor / 1000), 'timemargin=250']
+
+        # Seconds, scaled by this machine's NPS, with upstream OpenBench's time margin
+        match = re.fullmatch(r'(\d*\.?\d+)(\+(\d*\.?\d+))?', control)
+        if not match:
+            raise utils.OpenBenchFatalWorkerException('Unsupported time control: %s' % (control))
+        base, inc = float(match.group(1)) * scale_factor, float(match.group(3) or 0) * scale_factor
+        return ['tc=%.3f+%.4f' % (base, inc), 'timemargin=250']
+
+    @staticmethod
+    def engine_settings(config, command, branch, scale_factor, runner_idx):
+
+        options = config.workload['test'][branch]['options']
+
+        # Add any of the custom SPSA settings
+        if config.workload['test']['type'] == 'SPSA':
+            for param, data in config.workload['spsa'].items():
+                options += ' %s=%s' % (param, str(data[branch][runner_idx]))
+
+        flags = ['cmd=%s' % (os.path.join('Engines', command)), 'name=%s' % (FastchessRunner.engine_name(config, branch))]
+        flags += FastchessRunner.time_control(config, scale_factor, branch)
+
+        for name, value in re.findall(r'(\S+?)=("[^"]*"|\'[^\']*\'|\S*)', options):
+            flags.append('option.%s=%s' % (name, value.strip('"\'')))
+
+        return ['-engine'] + flags
+
+    @staticmethod
+    def command(config, binary, dev_cmd, base_cmd, scale_factor, timestamp, runner_idx):
+
+        test   = config.workload['test']
+        runner = config.workload['runner']
+        book   = test['book']['name']
+        pairs  = config.workload['distribution']['rounds-per-runner'] // 2
+
+        # The 960 form of the variant for Fischer Random books, as upstream OpenBench decides it
+        is_frc  = any(x in book.upper() for x in ('FRC', '960', 'FISCHER'))
+        variant = runner['variant_960'] if is_frc else runner['variant']
+
+        command  = [binary, '-variant', variant, '-recover', '-testEnv']
+        command += FastchessRunner.engine_settings(config, dev_cmd, 'dev', scale_factor, runner_idx)
+        command += FastchessRunner.engine_settings(config, base_cmd, 'base', scale_factor, runner_idx)
+
+        # Every opening is played twice, with the colours swapped: games 2k-1 and 2k are a pair
+        command += ['-concurrency', str(config.workload['distribution']['concurrency-per']),
+                    '-rounds', str(pairs), '-games', '2', '-repeat']
+
+        # Each runner plays its own slice of the shuffled book
+        if book.upper() != 'NONE':
+            start    = test['book_index'] + runner_idx * pairs
+            command += ['-openings', 'file=%s' % (os.path.join('Books', book)),
+                        'format=%s' % (book.split('.')[-1]), 'order=random', 'start=%d' % (start),
+                        '-srand', str(test['book_seed'])]
+
+        if test['win_adj'] != 'None':
+            command += ['-resign'] + test['win_adj'].split()
+        if test['draw_adj'] != 'None':
+            command += ['-draw'] + test['draw_adj'].split()
+
+        return command + ['-pgnout', 'file=%s' % (FastchessRunner.pgn_name(config, timestamp, runner_idx))]
+
+    @staticmethod
+    def pgn_name(config, timestamp, runner_idx):
+        test_id   = int(config.workload['test']['id'])
+        result_id = int(config.workload['result']['id'])
+        return 'PGNs/%d.%d.%d.%d.pgn' % (test_id, result_id, timestamp, runner_idx)
+
+    @staticmethod
+    def update_results(config, results, line):
+
+        if not (match := FastchessRunner.FINISHED_GAME.match(line)):
+            return
+
+        game, white, result, reason = int(match.group(1)), match.group(2), match.group(4), match.group(5)
+
+        # Dev's score in the game: 0, 1 or 2 half points
+        dev_white = white == FastchessRunner.engine_name(config, 'dev')
+        score     = 1 if result == '1/2-1/2' else 2 * ((result == '1-0') == dev_white)
+
+        results['crashes'   ] += 'disconnect' in reason or 'stall' in reason
+        results['timelosses'] += 'on time' in reason
+        results['illegals'  ] += 'illegal' in reason
+        results['games'][game] = (score, reason)
+
+        # Games 2k-1 and 2k are played from the same opening
+        first  = game if game % 2 else game - 1
+        if first not in results['games'] or first + 1 not in results['games']:
+            return
+
+        (s1, reason1), (s2, reason2) = results['games'].pop(first), results['games'].pop(first + 1)
+        results['trinomial'  ][s1] += 1
+        results['trinomial'  ][s2] += 1
+        results['pentanomial'][s1 + s2] += 1
+
+        verdicts = ['Dev Double Loss (-2)', 'Dev Loss (-1)', 'Tie (=0)', 'Dev Win (+1)', 'Dev Double Win (+2)']
+        outcomes = ['Loss', 'Draw', 'Win']
+        return (first + 1) // 2, '%s [G1: %s, %s; G2: %s, %s]' % (
+            verdicts[s1 + s2], outcomes[s1], reason1, outcomes[s2], reason2)
+
+    @staticmethod
+    def report_errors(config, timestamp, runner_cnt):
+
+        # Games ending in a crash, a stall or an illegal move, with the game as fastchess saved it
+        for x in range(runner_cnt):
+            fname = FastchessRunner.pgn_name(config, timestamp, x)
+            if not os.path.isfile(fname):
+                continue
+            with open(fname, encoding='utf-8', errors='replace') as fin:
+                games = re.split(r'\n(?=\[Event )', fin.read())
+            for game in games:
+                # The last comment ends with the termination, ie "{-0.24/3 0.086s, White disconnects}"
+                if (match := re.search(r'\{([^{}]*(disconnects|stalls|illegal move)[^{}]*)\}\s*(1-0|0-1|1/2-1/2)\s*$', game)):
+                    reason = match.group(1).split(', ')[-1]
+                    ServerReporter.report_engine_error(config, 'Fastchess: %s' % (reason), game)
+
+def run_and_parse_fastchess(config, command, runner_idx, results_queue, abort_flag, runners):
+
+    # As run_and_parse_runner(), for fastchess: one result per finished game pair
+
+    if abort_flag.is_set():
+        return
+
+    print('\n[#%d] Launching fastchess...\n%s\n' % (runner_idx, shlex.join(command)))
+
+    runner = Popen(command, stdout=PIPE, stderr=STDOUT)
+    runners.append(runner)
+
+    results = {
+        'trinomial'   : [0, 0, 0],       # LDW
+        'pentanomial' : [0, 0, 0, 0, 0], # LL DL DD DW WW
+        'games'       : {},              # game number : (Dev's score, termination)
+        'crashes'     : 0,
+        'timelosses'  : 0,
+        'illegals'    : 0,
+    }
+
+    output = collections.deque(maxlen=100)
+    pairs  = config.workload['distribution']['rounds-per-runner'] // 2
+
+    for line in iter(runner.stdout.readline, b''):
+
+        if abort_flag.is_set():
+            break
+
+        line = line.decode('utf-8', errors='replace').strip()
+        output.append(line)
+
+        if line.startswith('Finished game'):
+            if (pair := FastchessRunner.update_results(config, results, line)):
+                print('[#%d] Pair %d/%d: %s' % (runner_idx, pair[0], pairs, pair[1]))
+
+        elif line and not FastchessRunner.QUIET_LINE.match(line):
+            print('[#%d] %s' % (runner_idx, line))
+
+        # Add to the results queue every time we have a game-pair finished
+        if any(results['pentanomial']):
+
+            results_queue.put({
+                'trinomial'   : list(results['trinomial']),
+                'pentanomial' : list(results['pentanomial']),
+                'crashes'     : results['crashes'],
+                'timelosses'  : results['timelosses'],
+                'illegals'    : results['illegals'],
+                'runner_idx'  : runner_idx,
+            })
+
+            results['trinomial'  ] = [0, 0, 0]
+            results['pentanomial'] = [0, 0, 0, 0, 0]
+            results['crashes'    ] = 0
+            results['timelosses' ] = 0
+            results['illegals'   ] = 0
+
+    if abort_flag.is_set():
+        kill_process_tree(runner.pid)
+
+    if runner.wait() == 0 or abort_flag.is_set():
+        return
+
+    results_queue.put({
+        'trinomial'   : [0, 0, 0],
+        'pentanomial' : [0, 0, 0, 0, 0],
+        'crashes'     : 1,
+        'timelosses'  : 0,
+        'illegals'    : 0,
+        'runner_idx'  : runner_idx,
+    })
+    abort_flag.set()
+
+    message = 'Fastchess failed, exit code %d' % (runner.returncode)
+    raise utils.OpenBenchMatchRunnerFailedException(message, '\n'.join(output))
+
 class ResultsReporter(object):
 
     ## Handles idle looping while reading from the results Queue that the match runner
@@ -1352,7 +1630,18 @@ def complete_workload(config):
     concurrency_per = config.workload['distribution']['concurrency-per']
     rounds_per      = config.workload['distribution']['rounds-per-runner']
 
-    is_ffa = FfaRunner.is_ffa(config)
+    is_ffa     = FfaRunner.is_ffa(config)
+    is_variant = FastchessRunner.is_variant(config)
+
+    # Variant tests are played by fastchess, built here the first time. A failed build is
+    # reported like a failed engine build, and the Test is skipped for a while
+    if is_variant:
+        try:
+            fastchess = FastchessRunner.build(config)
+        except utils.OpenBenchBuildFailedException as error:
+            config.blacklist[config.workload['test']['id']] = time.time()
+            ServerReporter.report_engine_error(config, error.message, error.logs)
+            raise
 
     print () # Record this information
     print ('%d match runner copies' % (runner_cnt))
@@ -1375,6 +1664,9 @@ def complete_workload(config):
             if is_ffa:
                 cmd = FfaRunner.command(config, dev_name, base_name, scale_factor, timestamp, x)
                 tasks.append(executor.submit(run_and_parse_ffa_runner, config, cmd, x, results, abort_flag, runners))
+            elif is_variant:
+                cmd = FastchessRunner.command(config, fastchess, dev_name, base_name, scale_factor, timestamp, x)
+                tasks.append(executor.submit(run_and_parse_fastchess, config, cmd, x, results, abort_flag, runners))
             else:
                 cmd = build_runner_command(config, dev_name, base_name, scale_factor, timestamp, x)
                 tasks.append(executor.submit(run_and_parse_runner, config, cmd, x, results, abort_flag, runners))
@@ -1387,6 +1679,8 @@ def complete_workload(config):
             concurrent.futures.wait(tasks)
             if is_ffa:
                 FfaRunner.report_errors(config, timestamp, runner_cnt)
+            elif is_variant:
+                FastchessRunner.report_errors(config, timestamp, runner_cnt)
             else:
                 rr.send_errors(timestamp, runner_cnt)
 
@@ -1396,9 +1690,14 @@ def complete_workload(config):
             MatchRunner.kill_everything(runners, dev_name, base_name)
             raise
 
+        # Variant games are PGNs, sent if requested. Fastchess keeps no per-move NPS records
+        if is_variant and config.workload['test']['upload_pgns'] != 'FALSE':
+            pgn_files = [FastchessRunner.pgn_name(config, timestamp, x) for x in range(runner_cnt)]
+            ServerReporter.report_pgn(config, MatchRunner.compress_pgn_files(pgn_files))
+
         # FFA games are kept as ffa_match.py's .ffa.jsonl records in PGNs/; there are no PGN4 files
         # or per-move NPS records to send
-        if not is_ffa:
+        if not is_ffa and not is_variant:
 
             pgn_files = [MatchRunner.pgn_name(config, timestamp, x) for x in range(runner_cnt)]
             records   = sum([MatchRunner.read_records(config, timestamp, x) for x in range(runner_cnt)], [])
