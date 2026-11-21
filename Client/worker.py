@@ -61,7 +61,7 @@ from client import try_forever
 
 ## Basic configuration of the Client. These timeouts can be changed at will
 
-CLIENT_VERSION   = 71 # Client version to send to the Server
+CLIENT_VERSION   = 72 # Client version to send to the Server
 TIMEOUT_HTTP     = 30 # Timeout in seconds for HTTP requests
 TIMEOUT_ERROR    = 60 # Timeout in seconds when any errors are thrown
 TIMEOUT_WORKLOAD = 60 # Timeout in seconds between workload requests
@@ -880,9 +880,16 @@ class FastchessRunner:
         return bool(config.workload['test'].get('variant'))
 
     @staticmethod
+    def is_android(config):
+        return config.os_name == 'Android' or 'ANDROID_ROOT' in os.environ
+
+    @staticmethod
     def binary(config):
+        # Android builds use their own flags (see build()), so they are kept apart, which also
+        # replaces client 71's -march=native builds
         runner = config.workload['runner']
         folder = '%s-%s' % (runner['name'], runner['ref'][:12])
+        folder += '-android' if FastchessRunner.is_android(config) else ''
         return os.path.join('Runners', folder, runner['name'] + ('.exe' if IS_WINDOWS else ''))
 
     @staticmethod
@@ -916,9 +923,12 @@ class FastchessRunner:
             # Build with as many jobs as the Worker may use for games, and our C++ compiler
             command = ['make', '-j%d' % (config.threads), 'CXX=%s' % (config.cxx_comp)]
 
-            # Fastchess links -lstdc++fs on Linux, which Android's libc++ doesn't have
-            if config.os_name == 'Android' or 'ANDROID_ROOT' in os.environ:
-                command.append('LDFLAGS=-pthread')
+            # On Android: fastchess links -lstdc++fs on Linux, which Android's libc++ doesn't
+            # have; and built with -march=native it died at once with SIGILL on a Snapdragon
+            # tablet (Cortex-X4/A720/A520, whose kernel doesn't enable SVE), where a plain
+            # ARMv8 build runs. Its speed doesn't matter, so build it for plain ARMv8
+            if FastchessRunner.is_android(config):
+                command += ['LDFLAGS=-pthread', 'NATIVE=']
 
             process = Popen(command, cwd=src_dir, stdout=PIPE, stderr=STDOUT)
             output  = process.communicate()[0].decode('utf-8', errors='replace')
