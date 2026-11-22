@@ -2,18 +2,18 @@
     "private" : false,
     "variant" : "duck",
     "nps"     : 1000000,
-    "source"  : "https://github.com/Silverrzz/wakwak",
+    "source"  : "https://github.com/Anurag-Baundwal/wakwak",
 
     "build" : {
         "path"      : "",
         "compilers" : ["cargo>=1.89.0"],
         "cpuflags"  : [],
-        "systems"   : ["Windows", "Linux", "Darwin"]
+        "systems"   : ["Windows", "Linux", "Darwin", "Android"]
     },
 
     "test_presets" : {
         "default" : {
-            "base_branch"       : "main",
+            "base_branch"       : "openbench",
             "both_options"      : "Threads=1 Hash=16",
             "both_time_control" : "10.0+0.1",
             "test_bounds"       : "[0.00, 3.00]",
