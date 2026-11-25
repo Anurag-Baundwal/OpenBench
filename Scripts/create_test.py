@@ -36,7 +36,7 @@ data = {
     'book_name'        : 'fens_100k.txt',
     'upload_pgns'      : 'FALSE',
     'throughput'       : '1000',
-    'workload_size'    : '32',
+    'workload_size'    : '8',
     'priority'         : '0',
 
     'syzygy_wdl'       : 'DISABLED',

@@ -239,6 +239,11 @@ function change_engine(engine, target, workload_type) {
     set_option('win_adj', 'None');
     set_option('draw_adj', 'None');
 
+    // Workload size 8 for every Engine, unless its presets set another one
+    // (the Tune form has no such field)
+    if (document.getElementById('workload_size') != null)
+        set_option('workload_size', 8);
+
     apply_preset('STC', workload_type);
 }
 

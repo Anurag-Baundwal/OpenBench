@@ -21,7 +21,7 @@
             "book_name"         : "Duck_DFRC.epd",
             "win_adj"           : "movecount=8 score=800",
             "draw_adj"          : "movenumber=32 movecount=10 score=0",
-            "workload_size"     : "32"
+            "workload_size"     : "8"
         }
     },
 
