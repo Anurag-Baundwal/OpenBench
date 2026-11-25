@@ -15,8 +15,8 @@
         "duck" : {
             "runner" : {
                 "name"        : "fastchess",
-                "repo"        : "https://github.com/Silverrzz/fastchess",
-                "ref"         : "cfa3671a44884024f8f5f850ab38197748432def",
+                "repo"        : "https://github.com/Anurag-Baundwal/fastchess",
+                "ref"         : "2547e7fd97a8ad0e23d44a52ca6693a3fd799924",
                 "variant"     : "duck",
                 "variant_960" : "duck960"
             }
